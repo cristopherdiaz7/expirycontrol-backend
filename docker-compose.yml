@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: expiry-control-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: expiry_control
+      POSTGRES_USER: expiry_user
+      POSTGRES_PASSWORD: expiry_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
