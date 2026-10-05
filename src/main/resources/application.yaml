@@ -15,7 +15,8 @@ spring:
         format_sql: true
         jdbc:
           time_zone: UTC
+
 app:
   jwt:
-    secret: change-this-development-secret-key-with-at-least-32-characters
-    expiration-ms: 86400000
+    secret: expiry-control-secret-key-2026-change-me
+    expiration-ms: 3600000

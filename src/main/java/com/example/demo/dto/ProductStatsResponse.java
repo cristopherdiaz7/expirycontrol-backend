@@ -11,8 +11,10 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class LoginResponse {
+public class ProductStatsResponse {
 
-    private String token;
-    private UserResponse user;
+    private long totalProducts;
+    private long expiredProducts;
+    private long expiringSoonProducts;
+    private long validProducts;
 }
