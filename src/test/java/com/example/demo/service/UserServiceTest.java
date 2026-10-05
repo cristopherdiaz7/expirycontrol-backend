@@ -46,7 +46,7 @@ class UserServiceTest {
 
         when(userRepository.findByEmail("usuario@example.com")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("123456", "hashed-password")).thenReturn(true);
-        when(jwtService.generateToken("usuario@example.com", "Usuario Prueba"))
+        when(jwtService.generateToken("usuario@example.com", 1L, "Usuario Prueba"))
                 .thenReturn("jwt-token");
 
         LoginResponse response = userService.login(request);

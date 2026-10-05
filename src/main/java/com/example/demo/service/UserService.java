@@ -3,8 +3,6 @@ package com.example.demo.service;
 import com.example.demo.dto.LoginRequest;
 import com.example.demo.dto.LoginResponse;
 import com.example.demo.dto.UserRegisterRequest;
-import com.example.demo.dto.LoginRequest;
-import com.example.demo.dto.LoginResponse;
 import com.example.demo.dto.UserResponse;
 import com.example.demo.exception.EmailAlreadyExistsException;
 import com.example.demo.exception.InvalidCredentialsException;
@@ -55,10 +53,10 @@ public class UserService implements UserDetailsService {
     public LoginResponse login(LoginRequest request) {
         String normalizedEmail = request.getEmail().trim().toLowerCase();
         User user = userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new InvalidCredentialsException("Credenciales inválidas"));
+                .orElseThrow(() -> new InvalidCredentialsException("Email o contraseña incorrectos"));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new InvalidCredentialsException("Credenciales inválidas");
+            throw new InvalidCredentialsException("Email o contraseña incorrectos");
         }
 
         String token = jwtService.generateToken(user.getEmail(), user.getId(), user.getName());
