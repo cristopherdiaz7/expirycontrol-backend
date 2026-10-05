@@ -12,11 +12,6 @@ public class HelloController {
         return Map.of("greeting", "Hello World");
     }
 
-    @GetMapping("/login")
-    public Map<String, String> login() {
-        return Map.of("message", "Login exitoso");
-    }
-
     @GetMapping("/estado")
     public Map<String, String> estado() {
         return Map.of("estado", "Producto por vencer");
