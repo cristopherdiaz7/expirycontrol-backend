@@ -1,5 +1,7 @@
 package com.example.demo.security;
 import com.example.demo.service.UserService;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -8,6 +10,7 @@ import java.io.IOException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -35,22 +38,40 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         final String jwt = authHeader.substring(7);
-        final String email = jwtService.extractEmail(jwt);
 
-        if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = userService.loadUserByUsername(email);
+        // Un token inválido no corta la petición: queda sin autenticar y la
+        // regla de autorización decide (401 en rutas protegidas).
+        try {
+            final String email = jwtService.extractEmail(jwt);
 
-            if (jwtService.isTokenValid(jwt, userDetails)) {
-                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                        userDetails,
-                        null,
-                        userDetails.getAuthorities()
-                );
-                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(authToken);
+            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                UserDetails userDetails = userService.loadUserByUsername(email);
+
+                if (jwtService.isTokenValid(jwt, userDetails)) {
+                    UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+                            userDetails,
+                            null,
+                            userDetails.getAuthorities()
+                    );
+                    authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(authToken);
+                } else {
+                    rejectToken(request, JwtAuthenticationEntryPoint.INVALID_TOKEN);
+                }
+            } else if (email == null) {
+                rejectToken(request, JwtAuthenticationEntryPoint.INVALID_TOKEN);
             }
+        } catch (ExpiredJwtException ex) {
+            rejectToken(request, JwtAuthenticationEntryPoint.EXPIRED_TOKEN);
+        } catch (JwtException | IllegalArgumentException | UsernameNotFoundException ex) {
+            rejectToken(request, JwtAuthenticationEntryPoint.INVALID_TOKEN);
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private void rejectToken(HttpServletRequest request, String reason) {
+        SecurityContextHolder.clearContext();
+        request.setAttribute(JwtAuthenticationEntryPoint.AUTH_ERROR_ATTRIBUTE, reason);
     }
 }

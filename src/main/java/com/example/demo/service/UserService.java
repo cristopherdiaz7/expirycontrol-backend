@@ -10,6 +10,7 @@ import com.example.demo.model.User;
 import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -41,7 +42,13 @@ public class UserService implements UserDetailsService {
                 .password(hashedPassword)
                 .build();
 
-        User savedUser = userRepository.save(user);
+        User savedUser;
+        try {
+            savedUser = userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException ex) {
+            // Dos registros simultáneos con el mismo email: gana el primero.
+            throw new EmailAlreadyExistsException("El email ya se encuentra registrado");
+        }
 
         return UserResponse.builder()
                 .id(savedUser.getId())
