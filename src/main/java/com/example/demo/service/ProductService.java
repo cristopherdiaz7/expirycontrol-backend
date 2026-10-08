@@ -3,11 +3,13 @@ package com.example.demo.service;
 import com.example.demo.dto.ProductRequest;
 import com.example.demo.dto.ProductResponse;
 import com.example.demo.dto.ProductStatsResponse;
+import com.example.demo.exception.InvalidClientDateException;
 import com.example.demo.exception.ProductNotFoundException;
 import com.example.demo.model.Product;
 import com.example.demo.model.User;
 import com.example.demo.repository.ProductRepository;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -16,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class ProductService {
+
+    private static final long MAX_CLIENT_DATE_DRIFT_DAYS = 1;
 
     private final ProductRepository productRepository;
 
@@ -40,16 +44,16 @@ public class ProductService {
                 .toList();
     }
 
-    public List<ProductResponse> getExpired(Long userId) {
-        LocalDate today = LocalDate.now();
+    public List<ProductResponse> getExpired(Long userId, LocalDate clientToday) {
+        LocalDate today = resolveToday(clientToday);
         return productRepository.findByUserId(userId).stream()
                 .filter(product -> !product.getExpirationDate().isAfter(today))
                 .map(this::mapToResponse)
                 .toList();
     }
 
-    public List<ProductResponse> getExpiringSoon(Long userId, int days) {
-        LocalDate today = LocalDate.now();
+    public List<ProductResponse> getExpiringSoon(Long userId, int days, LocalDate clientToday) {
+        LocalDate today = resolveToday(clientToday);
         LocalDate thresholdDate = today.plusDays(Math.max(days, 0));
 
         return productRepository.findByUserId(userId).stream()
@@ -59,9 +63,9 @@ public class ProductService {
                 .toList();
     }
 
-    public ProductStatsResponse getStats(Long userId, int days) {
+    public ProductStatsResponse getStats(Long userId, int days, LocalDate clientToday) {
         List<Product> products = productRepository.findByUserId(userId);
-        LocalDate today = LocalDate.now();
+        LocalDate today = resolveToday(clientToday);
         LocalDate thresholdDate = today.plusDays(Math.max(days, 0));
 
         long expiredProducts = products.stream()
@@ -110,6 +114,19 @@ public class ProductService {
         Product product = productRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ProductNotFoundException("Producto no encontrado"));
         productRepository.delete(product);
+    }
+
+    // "Hoy" es la fecha local que envía el cliente; sin ella se usa la del servidor (UTC).
+    // Ninguna zona horaria difiere más de un día de UTC: una diferencia mayor es un dato inválido.
+    private LocalDate resolveToday(LocalDate clientToday) {
+        LocalDate serverToday = LocalDate.now();
+        if (clientToday == null) {
+            return serverToday;
+        }
+        if (Math.abs(ChronoUnit.DAYS.between(serverToday, clientToday)) > MAX_CLIENT_DATE_DRIFT_DAYS) {
+            throw new InvalidClientDateException("La fecha enviada no coincide con la fecha actual");
+        }
+        return clientToday;
     }
 
     private ProductResponse mapToResponse(Product product) {

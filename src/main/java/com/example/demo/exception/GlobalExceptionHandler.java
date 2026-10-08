@@ -41,6 +41,11 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    @ExceptionHandler(InvalidClientDateException.class)
+    public ResponseEntity<Map<String, String>> handleInvalidClientDate(InvalidClientDateException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+    }
+
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<Map<String, String>> handleUnreadableBody(HttpMessageNotReadableException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)

@@ -6,8 +6,10 @@ import com.example.demo.dto.ProductStatsResponse;
 import com.example.demo.model.User;
 import com.example.demo.service.ProductService;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -41,20 +43,26 @@ public class ProductController {
     }
 
     @GetMapping("/expired")
-    public ResponseEntity<List<ProductResponse>> getExpired(@AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(productService.getExpired(user.getId()));
+    public ResponseEntity<List<ProductResponse>> getExpired(@AuthenticationPrincipal User user,
+                                                            @RequestParam(required = false)
+                                                            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today) {
+        return ResponseEntity.ok(productService.getExpired(user.getId(), today));
     }
 
     @GetMapping("/expiring")
     public ResponseEntity<List<ProductResponse>> getExpiringSoon(@AuthenticationPrincipal User user,
-                                                              @RequestParam(defaultValue = "7") int days) {
-        return ResponseEntity.ok(productService.getExpiringSoon(user.getId(), days));
+                                                              @RequestParam(defaultValue = "7") int days,
+                                                              @RequestParam(required = false)
+                                                              @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today) {
+        return ResponseEntity.ok(productService.getExpiringSoon(user.getId(), days, today));
     }
 
     @GetMapping("/stats")
     public ResponseEntity<ProductStatsResponse> getStats(@AuthenticationPrincipal User user,
-                                                       @RequestParam(defaultValue = "7") int days) {
-        return ResponseEntity.ok(productService.getStats(user.getId(), days));
+                                                       @RequestParam(defaultValue = "7") int days,
+                                                       @RequestParam(required = false)
+                                                       @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today) {
+        return ResponseEntity.ok(productService.getStats(user.getId(), days, today));
     }
 
     @GetMapping("/{id}")

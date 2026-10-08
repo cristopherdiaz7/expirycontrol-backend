@@ -19,6 +19,7 @@ import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
 import jakarta.servlet.Filter;
 import java.time.LocalDate;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -169,6 +170,45 @@ class SecurityIntegrationTest {
         mockMvc.perform(authorized(get("/products/expiring?days=abc"), tokenFor(userA)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Valor inválido para el parámetro 'days'"));
+    }
+
+    // --- Parámetro today ---
+
+    @Test
+    void dateEndpointsAcceptClientDate() throws Exception {
+        String tokenA = tokenFor(userA);
+        String today = LocalDate.now().toString();
+
+        mockMvc.perform(authorized(get("/products/expired?today=" + today), tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        mockMvc.perform(authorized(get("/products/expiring?days=30&today=" + today), tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+
+        mockMvc.perform(authorized(get("/products/stats?days=30&today=" + today), tokenA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalProducts").value(1))
+                .andExpect(jsonPath("$.expiringSoonProducts").value(1));
+    }
+
+    @Test
+    void malformedClientDateReturns400WithJsonError() throws Exception {
+        mockMvc.perform(authorized(get("/products/stats?today=08-10-2026"), tokenFor(userA)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Valor inválido para el parámetro 'today'"));
+    }
+
+    @Test
+    void clientDateOutOfRangeReturns400WithJsonError() throws Exception {
+        String farDate = LocalDate.now().plusDays(5).toString();
+
+        for (String path : List.of("/products/expired", "/products/expiring", "/products/stats")) {
+            mockMvc.perform(authorized(get(path + "?today=" + farDate), tokenFor(userA)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("La fecha enviada no coincide con la fecha actual"));
+        }
     }
 
     // --- Registro ---
