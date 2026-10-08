@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:expirytest;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+
+app:
+  jwt:
+    secret: clave-solo-para-tests-no-usar-fuera-de-tests-0123456789
+    expiration-ms: 3600000
