@@ -37,7 +37,7 @@ public class SecurityConfig {
                         // El despacho interno a /error no pasa por el filtro JWT: sin esto,
                         // un 400 o 500 de un usuario autenticado saldría como 401.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
-                        .requestMatchers("/register", "/login", "/hello").permitAll()
+                        .requestMatchers("/register", "/login").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
