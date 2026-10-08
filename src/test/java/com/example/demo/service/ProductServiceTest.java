@@ -2,6 +2,7 @@ package com.example.demo.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.example.demo.dto.ProductRequest;
 import com.example.demo.dto.ProductResponse;
 import com.example.demo.dto.ProductStatsResponse;
+import com.example.demo.exception.InvalidClientDateException;
 import com.example.demo.model.Product;
 import com.example.demo.repository.ProductRepository;
 import java.time.LocalDate;
@@ -126,7 +128,7 @@ class ProductServiceTest {
 
         when(productRepository.findByUserId(10L)).thenReturn(List.of(expired, fresh));
 
-        List<ProductResponse> response = productService.getExpired(10L);
+        List<ProductResponse> response = productService.getExpired(10L, null);
 
         assertEquals(1, response.size());
         assertEquals("Yogur", response.get(0).getName());
@@ -154,7 +156,7 @@ class ProductServiceTest {
 
         when(productRepository.findByUserId(10L)).thenReturn(List.of(nearExpiry, later));
 
-        List<ProductResponse> response = productService.getExpiringSoon(10L, 7);
+        List<ProductResponse> response = productService.getExpiringSoon(10L, 7, null);
 
         assertEquals(1, response.size());
         assertEquals("Leche", response.get(0).getName());
@@ -191,11 +193,86 @@ class ProductServiceTest {
 
         when(productRepository.findByUserId(10L)).thenReturn(List.of(expired, expiringSoon, valid));
 
-        ProductStatsResponse stats = productService.getStats(10L, 7);
+        ProductStatsResponse stats = productService.getStats(10L, 7, null);
 
         assertEquals(3, stats.getTotalProducts());
         assertEquals(1, stats.getExpiredProducts());
         assertEquals(1, stats.getExpiringSoonProducts());
         assertEquals(1, stats.getValidProducts());
+    }
+
+    // --- Fecha local del usuario (parámetro today) ---
+
+    @Test
+    void productExpiringTodayIsExpiredAndNotExpiringSoon() {
+        LocalDate today = LocalDate.now();
+        when(productRepository.findByUserId(10L)).thenReturn(List.of(productExpiringOn(today)));
+
+        assertEquals(1, productService.getExpired(10L, null).size());
+        assertEquals(0, productService.getExpiringSoon(10L, 7, null).size());
+    }
+
+    @Test
+    void clientDateOneDayBehindServerKeepsProductAsExpiringSoon() {
+        LocalDate serverToday = LocalDate.now();
+        LocalDate clientToday = serverToday.minusDays(1);
+        when(productRepository.findByUserId(10L)).thenReturn(List.of(productExpiringOn(serverToday)));
+
+        assertEquals(0, productService.getExpired(10L, clientToday).size());
+        assertEquals(1, productService.getExpiringSoon(10L, 7, clientToday).size());
+
+        ProductStatsResponse stats = productService.getStats(10L, 7, clientToday);
+        assertEquals(0, stats.getExpiredProducts());
+        assertEquals(1, stats.getExpiringSoonProducts());
+    }
+
+    @Test
+    void clientDateOneDayAheadOfServerMarksProductAsExpired() {
+        LocalDate serverToday = LocalDate.now();
+        LocalDate clientToday = serverToday.plusDays(1);
+        when(productRepository.findByUserId(10L)).thenReturn(List.of(productExpiringOn(clientToday)));
+
+        assertEquals(0, productService.getExpired(10L, null).size());
+        assertEquals(1, productService.getExpired(10L, clientToday).size());
+    }
+
+    @Test
+    void expiringSoonIncludesLimitDayAndExcludesNextDay() {
+        LocalDate today = LocalDate.now();
+        when(productRepository.findByUserId(10L)).thenReturn(List.of(
+                productExpiringOn(today.plusDays(7)),
+                productExpiringOn(today.plusDays(8))));
+
+        List<ProductResponse> response = productService.getExpiringSoon(10L, 7, today);
+
+        assertEquals(1, response.size());
+        assertEquals(today.plusDays(7), response.get(0).getExpirationDate());
+
+        ProductStatsResponse stats = productService.getStats(10L, 7, today);
+        assertEquals(1, stats.getExpiringSoonProducts());
+        assertEquals(1, stats.getValidProducts());
+    }
+
+    @Test
+    void clientDateMoreThanOneDayAwayIsRejected() {
+        LocalDate serverToday = LocalDate.now();
+
+        assertThrows(InvalidClientDateException.class,
+                () -> productService.getExpired(10L, serverToday.plusDays(2)));
+        assertThrows(InvalidClientDateException.class,
+                () -> productService.getExpiringSoon(10L, 7, serverToday.minusDays(2)));
+        assertThrows(InvalidClientDateException.class,
+                () -> productService.getStats(10L, 7, serverToday.plusDays(30)));
+    }
+
+    private Product productExpiringOn(LocalDate date) {
+        return Product.builder()
+                .id(100L)
+                .name("Producto")
+                .description("Prueba")
+                .category("Varios")
+                .quantity(1)
+                .expirationDate(date)
+                .build();
     }
 }
