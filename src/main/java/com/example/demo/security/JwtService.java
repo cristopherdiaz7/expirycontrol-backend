@@ -8,7 +8,6 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
@@ -16,14 +15,20 @@ import org.springframework.stereotype.Service;
 @Service
 public class JwtService {
 
-    @Value("${app.jwt.secret}")
-    private String secret;
+    private static final int MIN_SECRET_BYTES = 32;
 
-    @Value("${app.jwt.expiration-ms}")
-    private long expirationMs;
+    private final SecretKey signingKey;
+    private final long expirationMs;
 
-    public String generateToken(String email, String name) {
-        return generateToken(email, null, name);
+    public JwtService(@Value("${app.jwt.secret}") String secret,
+                      @Value("${app.jwt.expiration-ms}") long expirationMs) {
+        byte[] secretBytes = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
+        if (secretBytes.length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "JWT_SECRET debe tener al menos " + MIN_SECRET_BYTES + " caracteres");
+        }
+        this.signingKey = Keys.hmacShaKeyFor(secretBytes);
+        this.expirationMs = expirationMs;
     }
 
     public String generateToken(String email, Long userId, String name) {
@@ -36,7 +41,7 @@ public class JwtService {
                 .subject(email)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationMs))
-                .signWith(getSigningKey())
+                .signWith(signingKey, Jwts.SIG.HS256)
                 .compact();
     }
 
@@ -44,18 +49,9 @@ public class JwtService {
         return getClaims(token).getSubject();
     }
 
-    public Long extractUserId(String token) {
-        Number userId = getClaims(token).get("userId", Number.class);
-        return userId == null ? null : userId.longValue();
-    }
-
     public boolean isTokenValid(String token, UserDetails userDetails) {
         final String email = extractEmail(token);
-        return email.equalsIgnoreCase(userDetails.getUsername()) && !isTokenExpired(token);
-    }
-
-    public static SecretKey secretKey(String secret) {
-        return new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        return email != null && email.equalsIgnoreCase(userDetails.getUsername()) && !isTokenExpired(token);
     }
 
     private boolean isTokenExpired(String token) {
@@ -64,13 +60,9 @@ public class JwtService {
 
     private Claims getClaims(String token) {
         return Jwts.parser()
-                .verifyWith(getSigningKey())
+                .verifyWith(signingKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
-    }
-
-    private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 }

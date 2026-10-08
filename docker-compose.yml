@@ -4,9 +4,9 @@ services:
     container_name: expiry-control-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: expiry_control
-      POSTGRES_USER: expiry_user
-      POSTGRES_PASSWORD: expiry_password
+      POSTGRES_DB: ${POSTGRES_DB:-expiry_control}
+      POSTGRES_USER: ${POSTGRES_USER:?Definir POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definir POSTGRES_PASSWORD en .env}
     ports:
       - "5433:5432"
     volumes:
