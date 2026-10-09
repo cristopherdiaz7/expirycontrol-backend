@@ -1,0 +1,125 @@
+name: CI
+
+# Integración continua: tests, jar e imagen Docker en cada cambio.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# El workflow solo necesita leer el código.
+permissions:
+  contents: read
+
+# Si llega un cambio nuevo a la misma rama, se cancela la ejecución anterior.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests y jar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      - name: Instalar Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # En Windows Git no guarda el permiso de ejecución del wrapper.
+      - name: Dar permiso de ejecución a mvnw
+        run: chmod +x mvnw
+
+      # Los tests usan H2 en memoria: no necesitan base de datos ni secretos.
+      - name: Ejecutar los tests
+        run: ./mvnw -B test
+
+      - name: Generar el jar
+        run: ./mvnw -B package -DskipTests
+
+      - name: Comprobar que existe target/app.jar
+        run: |
+          test -f target/app.jar
+          ls -lh target/app.jar
+
+      - name: Guardar el reporte de tests si fallaron
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reporte-de-tests
+          path: target/surefire-reports/
+          retention-days: 7
+
+  docker:
+    name: Imagen Docker
+    # Solo si los tests pasaron: no se construye una imagen con tests rotos.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      - name: Construir la imagen con el Dockerfile de la cátedra
+        run: docker build -t expiry-control:ci .
+
+      # Arranca la imagen con el perfil prod contra un PostgreSQL vacío,
+      # igual que en producción. Las credenciales se generan al azar en cada
+      # ejecución y no se guardan en ningún lado.
+      - name: Prueba de arranque
+        run: |
+          set -euo pipefail
+          DB_PASSWORD="$(openssl rand -hex 16)"
+          JWT_SECRET="$(openssl rand -hex 48)"
+          echo "::add-mask::$DB_PASSWORD"
+          echo "::add-mask::$JWT_SECRET"
+
+          docker network create ci
+          docker run -d --name db --network ci \
+            -e POSTGRES_DB=expiry_control \
+            -e POSTGRES_USER=expiry_user \
+            -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+            postgres:16
+
+          echo "Esperando a PostgreSQL..."
+          for i in $(seq 1 30); do
+            if docker exec db pg_isready -h 127.0.0.1 -U expiry_user -d expiry_control > /dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+          docker run -d --name app --network ci -p 8080:8080 \
+            -e SPRING_PROFILES_ACTIVE=prod \
+            -e SPRING_OUTPUT_ANSI_ENABLED=NEVER \
+            -e DB_URL=jdbc:postgresql://db:5432/expiry_control \
+            -e POSTGRES_USER=expiry_user \
+            -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e CORS_ALLOWED_ORIGINS=http://localhost:8081 \
+            expiry-control:ci
+
+          echo "Esperando a la aplicación..."
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:8080/actuator/health 2> /dev/null | grep -q '"status":"UP"'; then
+              echo "La aplicación responde: salud UP"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "La aplicación no respondió a tiempo"
+          exit 1
+
+      - name: Comprobar que los endpoints siguen protegidos
+        run: |
+          status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/products)"
+          echo "GET /products sin token: $status"
+          test "$status" = "401"
+
+      - name: Mostrar los logs de la aplicación
+        if: always()
+        run: docker logs app 2>&1 | tail -n 60 || true

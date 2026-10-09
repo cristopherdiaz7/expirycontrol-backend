@@ -1,5 +1,7 @@
 # ExpiryControl — Backend
 
+[![CI](https://github.com/cristopherdiaz7/expirycontrol-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/cristopherdiaz7/expirycontrol-backend/actions/workflows/ci.yml)
+
 API REST de ExpiryControl, una aplicación para registrar productos con su cantidad, precio y fecha de vencimiento, consultar cuáles están vencidos, por vencer o vigentes, y llevar el registro de las pérdidas económicas por productos vencidos. Cada usuario ve y administra únicamente sus propios productos.
 
 El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol-frontend](https://github.com/cristopherdiaz7/expirycontrol-frontend).
@@ -22,6 +24,7 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Salud](#salud)
 - [Migraciones de la base](#migraciones-de-la-base)
 - [Imagen Docker](#imagen-docker)
+- [Integración continua](#integración-continua)
 - [Tests](#tests)
 - [Estructura del proyecto](#estructura-del-proyecto)
 - [Problemas frecuentes](#problemas-frecuentes)
@@ -601,6 +604,25 @@ Medidos en una máquina de desarrollo; sirven de orientación.
 | Memoria en uso | Entre 270 y 350 MB |
 | Arranque con 512 MB de memoria | Correcto |
 | Cierre | Ordenado: termina las peticiones en curso y cierra el pool de conexiones |
+
+## Integración continua
+
+El workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre en GitHub Actions en cada push a `master`, en cada Pull Request hacia `master` y también a mano desde la pestaña Actions.
+
+| Job | Qué hace | Si falla |
+|---|---|---|
+| **Tests y jar** | Instala Java 21, ejecuta todos los tests, genera el jar y comprueba que existe `target/app.jar` | El job siguiente no se ejecuta |
+| **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | El pipeline queda en rojo |
+
+El segundo job depende del primero (`needs: test`): nunca se construye una imagen a partir de un código con tests rotos.
+
+**Prueba de arranque.** Dentro del pipeline se levanta un PostgreSQL vacío y se arranca la imagen con el perfil `prod`, como en producción. Se comprueba que `/actuator/health` responde `UP` y que `/products` sigue respondiendo `401` sin token. Detecta lo que los tests no ven: una imagen que no compila, una migración que falla o una variable que falta.
+
+**Sin secretos.** El workflow no usa ninguna credencial guardada. La contraseña de la base y la clave JWT de la prueba se generan al azar en cada ejecución. Su único permiso es leer el código (`contents: read`).
+
+**Reporte de tests.** Si algún test falla, el reporte queda disponible para descargar desde la ejecución durante 7 días.
+
+El pipeline todavía no publica la imagen ni despliega.
 
 ## Tests
 
