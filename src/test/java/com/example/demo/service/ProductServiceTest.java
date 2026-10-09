@@ -14,6 +14,7 @@ import com.example.demo.exception.InvalidClientDateException;
 import com.example.demo.model.Product;
 import com.example.demo.repository.NotificationReadRepository;
 import com.example.demo.repository.ProductRepository;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,8 @@ class ProductServiceTest {
                 "Entera",
                 "Lácteos",
                 12,
-                LocalDate.now().plusDays(10)
+                LocalDate.now().plusDays(10),
+                new BigDecimal("1500.50")
         );
 
         Product savedProduct = Product.builder()
@@ -98,7 +100,8 @@ class ProductServiceTest {
                 "Sin grasa",
                 "Lácteos",
                 8,
-                LocalDate.now().plusDays(15)
+                LocalDate.now().plusDays(15),
+                new BigDecimal("2300.00")
         );
 
         when(productRepository.findByIdAndUserId(3L, 10L)).thenReturn(java.util.Optional.of(existing));

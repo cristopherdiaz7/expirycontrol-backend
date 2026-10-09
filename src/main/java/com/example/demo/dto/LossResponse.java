@@ -13,14 +13,15 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ProductResponse {
+public class LossResponse {
 
     private Long id;
-    private String name;
-    private String description;
-    private String category;
+    // null cuando el producto ya fue eliminado.
+    private Long productId;
+    private String productName;
     private Integer quantity;
-    private LocalDate expirationDate;
-    // null en productos creados antes de que existiera el precio.
     private BigDecimal unitPrice;
+    private LocalDate expirationDate;
+    private BigDecimal totalAmount;
+    private boolean productDeleted;
 }

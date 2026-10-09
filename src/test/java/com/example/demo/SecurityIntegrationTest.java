@@ -38,7 +38,7 @@ class SecurityIntegrationTest {
 
     private static final String OTHER_SECRET = "otra-clave-distinta-para-firmar-0123456789";
     private static final String PRODUCT_JSON = """
-            {"name":"Modificado","description":"Cambio","category":"Otra","quantity":99,"expirationDate":"2030-01-01"}
+            {"name":"Modificado","description":"Cambio","category":"Otra","quantity":99,"expirationDate":"2030-01-01","unitPrice":250.00}
             """;
 
     @Autowired

@@ -1,6 +1,6 @@
 # ExpiryControl — Backend
 
-API REST de ExpiryControl, una aplicación para registrar productos con su cantidad y fecha de vencimiento, y consultar cuáles están vencidos, por vencer o vigentes. Cada usuario ve y administra únicamente sus propios productos.
+API REST de ExpiryControl, una aplicación para registrar productos con su cantidad, precio y fecha de vencimiento, consultar cuáles están vencidos, por vencer o vigentes, y llevar el registro de las pérdidas económicas por productos vencidos. Cada usuario ve y administra únicamente sus propios productos.
 
 El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol-frontend](https://github.com/cristopherdiaz7/expirycontrol-frontend).
 
@@ -16,6 +16,7 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Ejemplos](#ejemplos)
 - [Reglas de vencimiento](#reglas-de-vencimiento)
 - [Notificaciones](#notificaciones)
+- [Precios y pérdidas](#precios-y-pérdidas)
 - [Errores](#errores)
 - [CORS](#cors)
 - [Tests](#tests)
@@ -191,7 +192,7 @@ Rutas públicas: `/register` y `/login`. Todas las demás requieren token.
 | GET | `/products` | — | `200` con la lista del usuario |
 | GET | `/products/{id}` | — | `200` con el producto · `404` |
 | PUT | `/products/{id}` | Cuerpo: producto | `200` con el producto actualizado · `400` · `404` |
-| DELETE | `/products/{id}` | — | `204` sin cuerpo · `404` |
+| DELETE | `/products/{id}` | `today` (opcional) | `204` sin cuerpo · `404` |
 | GET | `/products/expired` | `today` (opcional) | `200` con los productos vencidos |
 | GET | `/products/expiring` | `days` (opcional, por defecto 7), `today` (opcional) | `200` con los productos por vencer |
 | GET | `/products/stats` | `days` (opcional, por defecto 7), `today` (opcional) | `200` con los cuatro contadores |
@@ -210,6 +211,15 @@ Un producto ajeno se trata igual que uno inexistente: responde `404`.
 
 Ver [Notificaciones](#notificaciones) para las categorías y el estado de lectura.
 
+### Pérdidas
+
+| Método | Ruta | Parámetros | Respuesta |
+|---|---|---|---|
+| GET | `/losses` | `today` (opcional) | `200` con la lista de pérdidas, de la más reciente a la más antigua |
+| GET | `/losses/stats` | `today` (opcional) | `200` con el importe total, la cantidad de pérdidas, las unidades perdidas y el detalle por mes |
+
+Ver [Precios y pérdidas](#precios-y-pérdidas) para las reglas.
+
 ### Campos de un producto
 
 | Campo | Tipo | Regla |
@@ -219,8 +229,9 @@ Ver [Notificaciones](#notificaciones) para las categorías y el estado de lectur
 | `category` | texto | Obligatorio |
 | `quantity` | entero | Obligatorio, 0 o mayor |
 | `expirationDate` | fecha `AAAA-MM-DD` | Obligatorio |
+| `unitPrice` | decimal | Obligatorio, 0 o mayor, hasta 2 decimales. Precio unitario en pesos argentinos (ARS) |
 
-La respuesta incluye además el `id`.
+La respuesta incluye además el `id`. En los productos creados antes de que existiera el precio, `unitPrice` es `null` hasta que se editen.
 
 ## Ejemplos
 
@@ -261,11 +272,11 @@ En los ejemplos siguientes, `$TOKEN` es el valor de `token`.
 curl -X POST http://localhost:8080/products \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Leche","description":"Entera","category":"Bebidas","quantity":12,"expirationDate":"2030-01-15"}'
+  -d '{"name":"Leche","description":"Entera","category":"Bebidas","quantity":12,"expirationDate":"2030-01-15","unitPrice":1250.50}'
 ```
 
 ```json
-{"id":1,"name":"Leche","description":"Entera","category":"Bebidas","quantity":12,"expirationDate":"2030-01-15"}
+{"id":1,"name":"Leche","description":"Entera","category":"Bebidas","quantity":12,"expirationDate":"2030-01-15","unitPrice":1250.50}
 ```
 
 > La API acepta tildes y eñes (UTF-8). El ejemplo no las usa porque algunas terminales de Windows las envían con otra codificación y el servidor responde `400`.
@@ -390,6 +401,85 @@ El centro de notificaciones distingue "vence hoy" (`EXPIRES_TODAY`) de "vencido"
 
 Las notificaciones aceptan el parámetro `today`, con las mismas reglas que el resto.
 
+## Precios y pérdidas
+
+### Precio unitario
+
+Cada producto tiene un precio unitario (`unitPrice`) en pesos argentinos (ARS). Es obligatorio al crear y al editar, y se guarda como decimal exacto con dos decimales.
+
+### Cuándo se registra una pérdida
+
+Un producto genera una pérdida cuando está **vencido** (su fecha es hoy o anterior, la misma regla que usa el resto del sistema) y **tiene precio**. Los productos sin precio no generan pérdidas.
+
+Cada pérdida guarda una copia de los datos del producto en ese momento:
+
+| Campo | Contenido |
+|---|---|
+| `productName` | Nombre del producto |
+| `quantity` | Cantidad afectada |
+| `unitPrice` | Precio unitario |
+| `expirationDate` | Fecha de vencimiento, que es la fecha de la pérdida |
+| `totalAmount` | Importe total: cantidad × precio unitario |
+| `productId` | Id del producto, o `null` si ya fue eliminado |
+| `productDeleted` | `true` si el producto ya fue eliminado |
+
+Las pérdidas se registran al consultarlas (`GET /losses` o `GET /losses/stats`) y al eliminar un producto vencido. No hace falta ninguna acción del usuario.
+
+### Reglas
+
+- **Una sola pérdida por producto.** No se cuenta dos veces, aunque lleguen consultas simultáneas; la base de datos lo garantiza con una restricción de unicidad.
+- **Mientras el producto existe, la pérdida lo acompaña.** Si se corrige su nombre, cantidad o precio, la pérdida se actualiza. Si la fecha pasa a ser futura, la pérdida se quita.
+- **Al eliminar el producto, la pérdida queda en el historial** tal como estaba, y ya no se modifica.
+- Cada usuario ve únicamente sus pérdidas.
+
+### Ejemplos
+
+`GET /losses`:
+
+```json
+[
+  {
+    "id": 7,
+    "productId": 12,
+    "productName": "Yogur",
+    "quantity": 4,
+    "unitPrice": 800.00,
+    "expirationDate": "2026-10-09",
+    "totalAmount": 3200.00,
+    "productDeleted": false
+  },
+  {
+    "id": 5,
+    "productId": null,
+    "productName": "Leche",
+    "quantity": 3,
+    "unitPrice": 1250.50,
+    "expirationDate": "2026-10-07",
+    "totalAmount": 3751.50,
+    "productDeleted": true
+  }
+]
+```
+
+`GET /losses/stats`:
+
+```json
+{
+  "currency": "ARS",
+  "totalAmount": 10951.50,
+  "lossCount": 3,
+  "unitsLost": 8,
+  "byMonth": [
+    { "month": "2026-10", "totalAmount": 6951.50, "lossCount": 2, "unitsLost": 7 },
+    { "month": "2026-08", "totalAmount": 4000.00, "lossCount": 1, "unitsLost": 1 }
+  ]
+}
+```
+
+El detalle por mes se agrupa por la fecha de vencimiento y va del mes más reciente al más antiguo.
+
+Ambos endpoints, y también `DELETE /products/{id}`, aceptan el parámetro `today` para decidir con la fecha local del usuario si un producto ya venció.
+
 ## Errores
 
 Todos los errores devuelven JSON con la clave `error`. Los de validación agregan `details`, con un mensaje por campo.
@@ -440,6 +530,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 |---|---|---|
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
+| `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
 | `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
 | `NotificationServiceTest` | 11 | Categorías sin duplicados, límites de días y estado de lectura |
 | `ProductServiceTest` | 11 | Reglas de vencimiento, estadísticas y casos límite de fechas |
@@ -447,7 +538,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `UserServiceTest` | 6 | Registro y login |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 81 tests.
+Total: 99 tests.
 
 ## Estructura del proyecto
 
@@ -464,7 +555,7 @@ expirycontrol-backend/
     │   │   ├── controller/            Endpoints HTTP
     │   │   ├── dto/                   Datos de entrada y salida
     │   │   ├── exception/             Excepciones y respuestas de error
-    │   │   ├── model/                 Entidades User, Product y NotificationRead
+    │   │   ├── model/                 Entidades User, Product, NotificationRead y Loss
     │   │   ├── repository/            Acceso a datos (Spring Data JPA)
     │   │   ├── security/              Filtro JWT, servicio JWT y respuesta 401
     │   │   └── service/               Lógica de negocio
@@ -483,8 +574,9 @@ expirycontrol-backend/
 | Tabla | Columnas | Restricciones |
 |---|---|---|
 | `users` | `id`, `name`, `email`, `password` | `email` único |
-| `products` | `id`, `name`, `description`, `category`, `quantity`, `expiration_date`, `user_id` | `user_id` referencia a `users(id)` |
+| `products` | `id`, `name`, `description`, `category`, `quantity`, `expiration_date`, `unit_price`, `user_id` | `user_id` referencia a `users(id)` |
 | `notification_reads` | `id`, `user_id`, `product_id`, `category`, `expiration_date`, `read_at` | Una fila por usuario y producto; se borra junto con el producto |
+| `losses` | `id`, `user_id`, `product_id`, `product_name`, `quantity`, `unit_price`, `expiration_date`, `total_amount`, `recorded_at` | `product_id` único; pasa a `null` cuando se elimina el producto |
 
 ## Problemas frecuentes
 
