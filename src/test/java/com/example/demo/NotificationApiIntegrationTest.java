@@ -11,48 +11,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.example.demo.model.Product;
 import com.example.demo.model.User;
-import com.example.demo.repository.NotificationReadRepository;
-import com.example.demo.repository.ProductRepository;
-import com.example.demo.repository.UserRepository;
-import com.example.demo.security.JwtService;
-import jakarta.servlet.Filter;
 import java.time.LocalDate;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
 
-@SpringBootTest
-@ActiveProfiles("test")
-class NotificationApiIntegrationTest {
+class NotificationApiIntegrationTest extends IntegrationTestSupport {
 
-    @Autowired
-    private WebApplicationContext context;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private ProductRepository productRepository;
-
-    @Autowired
-    private NotificationReadRepository notificationReadRepository;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    @Autowired
-    private JwtService jwtService;
-
-    private MockMvc mockMvc;
     private User userA;
     private User userB;
     private Product expiredOfA;
@@ -62,25 +27,12 @@ class NotificationApiIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context)
-                .addFilters(context.getBean("springSecurityFilterChain", Filter.class))
-                .build();
-
-        cleanDatabase();
-
         userA = saveUser("Usuario A", "a@example.com");
         userB = saveUser("Usuario B", "b@example.com");
         expiredOfA = saveProduct("Leche de A", userA, -1);
         soonOfA = saveProduct("Yogur de A", userA, 6);
         farOfA = saveProduct("Arroz de A", userA, 60);
         soonOfB = saveProduct("Queso de B", userB, 2);
-    }
-
-    @AfterEach
-    void cleanDatabase() {
-        notificationReadRepository.deleteAll();
-        productRepository.deleteAll();
-        userRepository.deleteAll();
     }
 
     @Test
@@ -237,30 +189,7 @@ class NotificationApiIntegrationTest {
         assertTrue(productRepository.findByUserId(userA.getId()).size() == 4);
     }
 
-    private MockHttpServletRequestBuilder authorized(MockHttpServletRequestBuilder request, User user) {
-        return request.header("Authorization", "Bearer " + jwtService.generateToken(user.getEmail(), user.getId(), user.getName()));
-    }
-
     private String productJson(String name, LocalDate expirationDate) {
         return "{\"name\":\"" + name + "\",\"description\":\"Descripcion\",\"category\":\"Frescos\",\"quantity\":3,\"expirationDate\":\"" + expirationDate + "\",\"unitPrice\":100.00}";
-    }
-
-    private User saveUser(String name, String email) {
-        return userRepository.save(User.builder()
-                .name(name)
-                .email(email)
-                .password(passwordEncoder.encode("secreta123"))
-                .build());
-    }
-
-    private Product saveProduct(String name, User owner, int daysFromToday) {
-        return productRepository.save(Product.builder()
-                .name(name)
-                .description("Descripcion")
-                .category("Frescos")
-                .quantity(3)
-                .expirationDate(LocalDate.now().plusDays(daysFromToday))
-                .user(owner)
-                .build());
     }
 }

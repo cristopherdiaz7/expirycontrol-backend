@@ -12,13 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.demo.model.Loss;
 import com.example.demo.model.Product;
 import com.example.demo.model.User;
-import com.example.demo.repository.LossRepository;
-import com.example.demo.repository.NotificationReadRepository;
-import com.example.demo.repository.ProductRepository;
-import com.example.demo.repository.UserRepository;
-import com.example.demo.security.JwtService;
 import com.example.demo.service.LossService;
-import jakarta.servlet.Filter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -28,69 +22,23 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
 
-@SpringBootTest
-@ActiveProfiles("test")
-class LossApiIntegrationTest {
-
-    @Autowired
-    private WebApplicationContext context;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private ProductRepository productRepository;
-
-    @Autowired
-    private LossRepository lossRepository;
-
-    @Autowired
-    private NotificationReadRepository notificationReadRepository;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    @Autowired
-    private JwtService jwtService;
+class LossApiIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private LossService lossService;
 
-    private MockMvc mockMvc;
     private User userA;
     private User userB;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context)
-                .addFilters(context.getBean("springSecurityFilterChain", Filter.class))
-                .build();
-
-        cleanDatabase();
-
         userA = saveUser("Usuario A", "a@example.com");
         userB = saveUser("Usuario B", "b@example.com");
-    }
-
-    @AfterEach
-    void cleanDatabase() {
-        lossRepository.deleteAll();
-        notificationReadRepository.deleteAll();
-        productRepository.deleteAll();
-        userRepository.deleteAll();
     }
 
     // --- Precio unitario ---
@@ -390,32 +338,8 @@ class LossApiIntegrationTest {
                 .andExpect(jsonPath("$.details.unitPrice").value(message));
     }
 
-    private MockHttpServletRequestBuilder authorized(MockHttpServletRequestBuilder request, User user) {
-        return request.header("Authorization", "Bearer " + jwtService.generateToken(user.getEmail(), user.getId(), user.getName()));
-    }
-
     private String productJson(String name, int quantity, LocalDate expirationDate, String unitPrice) {
         return "{\"name\":\"" + name + "\",\"description\":\"Descripcion\",\"category\":\"Frescos\",\"quantity\":" + quantity
                 + ",\"expirationDate\":\"" + expirationDate + "\",\"unitPrice\":" + unitPrice + "}";
-    }
-
-    private User saveUser(String name, String email) {
-        return userRepository.save(User.builder()
-                .name(name)
-                .email(email)
-                .password(passwordEncoder.encode("secreta123"))
-                .build());
-    }
-
-    private Product saveProduct(String name, User owner, int daysFromToday, int quantity, String unitPrice) {
-        return productRepository.save(Product.builder()
-                .name(name)
-                .description("Descripcion")
-                .category("Frescos")
-                .quantity(quantity)
-                .expirationDate(LocalDate.now().plusDays(daysFromToday))
-                .unitPrice(unitPrice == null ? null : new BigDecimal(unitPrice))
-                .user(owner)
-                .build());
     }
 }

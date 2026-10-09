@@ -14,49 +14,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.example.demo.model.Product;
 import com.example.demo.model.User;
-import com.example.demo.repository.ProductRepository;
-import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
-import jakarta.servlet.Filter;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
 
-@SpringBootTest
-@ActiveProfiles("test")
-class SecurityIntegrationTest {
+class SecurityIntegrationTest extends IntegrationTestSupport {
 
     private static final String OTHER_SECRET = "otra-clave-distinta-para-firmar-0123456789";
     private static final String PRODUCT_JSON = """
             {"name":"Modificado","description":"Cambio","category":"Otra","quantity":99,"expirationDate":"2030-01-01","unitPrice":250.00}
             """;
 
-    @Autowired
-    private WebApplicationContext context;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private ProductRepository productRepository;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    @Autowired
-    private JwtService jwtService;
-
-    private MockMvc mockMvc;
     private User userA;
     private User userB;
     private Product productOfA;
@@ -64,13 +35,6 @@ class SecurityIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context)
-                .addFilters(context.getBean("springSecurityFilterChain", Filter.class))
-                .build();
-
-        productRepository.deleteAll();
-        userRepository.deleteAll();
-
         userA = saveUser("Usuario A", "a@example.com");
         userB = saveUser("Usuario B", "b@example.com");
         productOfA = saveProduct("Leche de A", userA);
@@ -311,14 +275,6 @@ class SecurityIntegrationTest {
         assertTrue(productRepository.findById(productOfA.getId()).isEmpty());
     }
 
-    private MockHttpServletRequestBuilder authorized(MockHttpServletRequestBuilder request, String token) {
-        return request.header("Authorization", "Bearer " + token);
-    }
-
-    private String tokenFor(User user) {
-        return jwtService.generateToken(user.getEmail(), user.getId(), user.getName());
-    }
-
     private String expiredTokenFor(User user) {
         return new JwtService(testSecret(), -1000)
                 .generateToken(user.getEmail(), user.getId(), user.getName());
@@ -326,24 +282,5 @@ class SecurityIntegrationTest {
 
     private String testSecret() {
         return context.getEnvironment().getProperty("app.jwt.secret");
-    }
-
-    private User saveUser(String name, String email) {
-        return userRepository.save(User.builder()
-                .name(name)
-                .email(email)
-                .password(passwordEncoder.encode("secreta123"))
-                .build());
-    }
-
-    private Product saveProduct(String name, User owner) {
-        return productRepository.save(Product.builder()
-                .name(name)
-                .description("Descripción")
-                .category("Lácteos")
-                .quantity(3)
-                .expirationDate(LocalDate.now().plusDays(10))
-                .user(owner)
-                .build());
     }
 }
