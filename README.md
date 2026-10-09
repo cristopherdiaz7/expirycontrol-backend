@@ -36,7 +36,7 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 | Componente | Tecnología |
 |---|---|
 | Lenguaje | Java 21 |
-| Framework | Spring Boot 4.0.6 (Web MVC, Data JPA, Validation, Security, Actuator) |
+| Framework | Spring Boot 4.0.8 (Web MVC, Data JPA, Validation, Security, Actuator) |
 | Base de datos | PostgreSQL 16 (en Docker), con migraciones de Flyway y pool de conexiones HikariCP |
 | Autenticación | JWT firmado con HS256 (JJWT 0.12.5), contraseñas con BCrypt |
 | Build | Maven (incluye wrapper, no hace falta instalarlo) |
@@ -666,6 +666,47 @@ Requiere crear una cuenta y guardar un token en el repositorio. Lo que aportarí
 ### Por qué Grype solo informa
 
 Grype no detiene el pipeline (`fail-build: false`). La imagen base la define el `Dockerfile` de la cátedra, que no se modifica: un hallazgo en el sistema base o en la JVM no se podría corregir desde este repositorio. El informe queda a la vista para evaluarlo.
+
+### Estado de los hallazgos de Grype
+
+Medido el 9 de octubre de 2026 sobre la imagen construida con el `Dockerfile` del repositorio.
+
+| | Con Spring Boot 4.0.6 | Con Spring Boot 4.0.8 |
+|---|---|---|
+| Total | 142 | 85 |
+| Críticos | 8 | 3 |
+| Altos | 48 | 30 |
+| Medios | 57 | 28 |
+| Bajos | 11 | 6 |
+| Sin relevancia | 18 | 18 |
+
+La primera medición motivó la actualización de Spring Boot de 4.0.6 a 4.0.8, la última versión de corrección de la línea 4.0. Con ese cambio desaparecieron 57 hallazgos y no apareció ninguno nuevo.
+
+GitHub clasifica la gravedad con una escala propia, por lo que en la pestaña Security las cantidades por nivel pueden diferir de las de esta tabla; el total es el mismo.
+
+**Lo que queda, por origen:**
+
+| Origen | Hallazgos | Situación |
+|---|---|---|
+| Sistema base y JVM de la imagen | 68 (20 altos, 24 medios, 6 bajos, 18 sin relevancia) | No se pueden corregir desde este repositorio: dependen de la imagen base que define el `Dockerfile`. Ninguno tenía corrección publicada al momento de la medición |
+| Librerías dentro del jar | 17 (3 críticos, 10 altos, 4 medios) | Tienen corrección publicada, pero en versiones más nuevas que las que trae Spring Boot 4.0.8 |
+
+Las librerías del jar con hallazgos críticos o altos:
+
+| Librería | Versión incluida | Críticos | Altos | Corregido en |
+|---|---|---|---|---|
+| Tomcat | 11.0.24 | 3 | 0 | 11.0.25 |
+| Jackson 2 | 2.21.5 | 0 | 5 | 2.21.7 |
+| Jackson 3 | 3.1.5 | 0 | 5 | 3.1.7 |
+
+**Decisión tomada:** no se fijan a mano versiones más nuevas de esas tres librerías. Spring Boot administra un conjunto de versiones probadas entre sí; reemplazar algunas por fuera de ese conjunto obliga a mantenerlas manualmente y a acordarse de quitarlas en la siguiente actualización. Se corrigen al actualizar Spring Boot cuando publique una versión que las incluya. La línea 4.1 traía, a esa fecha, las mismas tres versiones.
+
+Para repetir la medición en una máquina con Docker:
+
+```bash
+docker build -t expiry-control:local .
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest expiry-control:local
+```
 
 ## Observabilidad
 
