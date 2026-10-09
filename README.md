@@ -15,6 +15,7 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Endpoints](#endpoints)
 - [Ejemplos](#ejemplos)
 - [Reglas de vencimiento](#reglas-de-vencimiento)
+- [Notificaciones](#notificaciones)
 - [Errores](#errores)
 - [CORS](#cors)
 - [Tests](#tests)
@@ -199,6 +200,16 @@ Todas pueden responder además `401` si falta el token o no es válido.
 
 Un producto ajeno se trata igual que uno inexistente: responde `404`.
 
+### Notificaciones
+
+| Método | Ruta | Parámetros | Respuesta |
+|---|---|---|---|
+| GET | `/notifications` | `today` (opcional) | `200` con `unreadCount` y la lista de notificaciones |
+| POST | `/notifications/{productId}/read` | `today` (opcional) | `200` con la lista actualizada · `404` si el producto no existe, es de otro usuario o no tiene notificación |
+| POST | `/notifications/read-all` | `today` (opcional) | `200` con la lista actualizada |
+
+Ver [Notificaciones](#notificaciones) para las categorías y el estado de lectura.
+
 ### Campos de un producto
 
 | Campo | Tipo | Regla |
@@ -323,6 +334,62 @@ GET /products/stats?days=7&today=2026-10-08
 
 Por defecto vale 7. Un valor negativo se trata como 0.
 
+## Notificaciones
+
+Las notificaciones no se guardan: se calculan en cada consulta a partir de los productos del usuario. Cada producto aparece **como máximo en una categoría**, según los días que faltan para su vencimiento:
+
+| Categoría (`category`) | Días restantes | Gravedad (`severity`) |
+|---|---|---|
+| `EXPIRED` | Menos de 0 (ya venció) | `EXPIRED` |
+| `EXPIRES_TODAY` | 0 | `EXPIRED` |
+| `WITHIN_3_DAYS` | 1 a 3 | `UPCOMING` |
+| `WITHIN_7_DAYS` | 4 a 7 | `UPCOMING` |
+| `WITHIN_14_DAYS` | 8 a 14 | `UPCOMING` |
+
+Un producto que vence en más de 14 días no genera notificación.
+
+Ejemplo de respuesta de `GET /notifications`, ordenada de más urgente a menos urgente:
+
+```json
+{
+  "unreadCount": 1,
+  "notifications": [
+    {
+      "productId": 4,
+      "productName": "Leche",
+      "category": "EXPIRED",
+      "severity": "EXPIRED",
+      "expirationDate": "2026-10-07",
+      "daysRemaining": -2,
+      "read": true
+    },
+    {
+      "productId": 9,
+      "productName": "Yogur",
+      "category": "WITHIN_3_DAYS",
+      "severity": "UPCOMING",
+      "expirationDate": "2026-10-11",
+      "daysRemaining": 2,
+      "read": false
+    }
+  ]
+}
+```
+
+### Estado de lectura
+
+- Se guarda por usuario, en la base de datos.
+- Al marcar una notificación como leída se registra la categoría y la fecha de vencimiento de ese momento.
+- Si el producto **cambia de categoría** (por ejemplo, de `WITHIN_7_DAYS` a `WITHIN_3_DAYS`) o se le **modifica la fecha**, la notificación vuelve a figurar sin leer.
+- Marcar dos veces la misma notificación no duplica registros.
+- Al eliminar un producto desaparecen su notificación y su estado de lectura.
+
+### Diferencia con los endpoints de vencimiento
+
+El centro de notificaciones distingue "vence hoy" (`EXPIRES_TODAY`) de "vencido" (`EXPIRED`). Los endpoints `/products/expired` y `/products/stats` no cambian: para ellos, un producto que vence hoy sigue contando como vencido.
+
+Las notificaciones aceptan el parámetro `today`, con las mismas reglas que el resto.
+
 ## Errores
 
 Todos los errores devuelven JSON con la clave `error`. Los de validación agregan `details`, con un mensaje por campo.
@@ -335,6 +402,7 @@ Todos los errores devuelven JSON con la clave `error`. Los de validación agrega
 | 400 | `today` difiere más de un día de la fecha del servidor | `{"error":"La fecha enviada no coincide con la fecha actual"}` |
 | 401 | Falta autenticación o es inválida | Ver [Autenticación](#autenticación) |
 | 404 | El producto no existe o es de otro usuario | `{"error":"Producto no encontrado"}` |
+| 404 | Se intenta marcar como leída la notificación de un producto que no tiene | `{"error":"El producto no tiene notificaciones"}` |
 | 409 | El email ya está registrado | `{"error":"El email ya se encuentra registrado"}` |
 
 ## CORS
@@ -372,12 +440,14 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 |---|---|---|
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
+| `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
+| `NotificationServiceTest` | 11 | Categorías sin duplicados, límites de días y estado de lectura |
 | `ProductServiceTest` | 11 | Reglas de vencimiento, estadísticas y casos límite de fechas |
 | `JwtServiceTest` | 8 | Generación y validación de tokens |
 | `UserServiceTest` | 6 | Registro y login |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 59 tests.
+Total: 81 tests.
 
 ## Estructura del proyecto
 
@@ -394,7 +464,7 @@ expirycontrol-backend/
     │   │   ├── controller/            Endpoints HTTP
     │   │   ├── dto/                   Datos de entrada y salida
     │   │   ├── exception/             Excepciones y respuestas de error
-    │   │   ├── model/                 Entidades User y Product
+    │   │   ├── model/                 Entidades User, Product y NotificationRead
     │   │   ├── repository/            Acceso a datos (Spring Data JPA)
     │   │   ├── security/              Filtro JWT, servicio JWT y respuesta 401
     │   │   └── service/               Lógica de negocio
@@ -414,6 +484,7 @@ expirycontrol-backend/
 |---|---|---|
 | `users` | `id`, `name`, `email`, `password` | `email` único |
 | `products` | `id`, `name`, `description`, `category`, `quantity`, `expiration_date`, `user_id` | `user_id` referencia a `users(id)` |
+| `notification_reads` | `id`, `user_id`, `product_id`, `category`, `expiration_date`, `read_at` | Una fila por usuario y producto; se borra junto con el producto |
 
 ## Problemas frecuentes
 

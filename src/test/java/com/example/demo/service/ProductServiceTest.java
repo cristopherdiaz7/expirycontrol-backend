@@ -12,6 +12,7 @@ import com.example.demo.dto.ProductResponse;
 import com.example.demo.dto.ProductStatsResponse;
 import com.example.demo.exception.InvalidClientDateException;
 import com.example.demo.model.Product;
+import com.example.demo.repository.NotificationReadRepository;
 import com.example.demo.repository.ProductRepository;
 import java.time.LocalDate;
 import java.util.List;
@@ -26,6 +27,9 @@ class ProductServiceTest {
 
     @Mock
     private ProductRepository productRepository;
+
+    @Mock
+    private NotificationReadRepository notificationReadRepository;
 
     @InjectMocks
     private ProductService productService;
