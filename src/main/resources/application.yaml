@@ -25,12 +25,15 @@ spring:
         jdbc:
           time_zone: UTC
 
-# Actuator: solo se publica el endpoint de salud, sin detalles internos.
+# Actuator: solo se publican salud (sin detalles internos) e información de versión.
 management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,info
+  info:
+    env:
+      enabled: true
   endpoint:
     health:
       show-details: never
@@ -39,6 +42,14 @@ management:
       group:
         readiness:
           include: readinessState,db
+
+# Lo que muestra /actuator/info. La versión sale del pom.xml al compilar;
+# el commit lo informa el despliegue con la variable APP_COMMIT.
+info:
+  app:
+    name: expiry-control
+    version: "@project.version@"
+    commit: ${APP_COMMIT:local}
 
 app:
   jwt:

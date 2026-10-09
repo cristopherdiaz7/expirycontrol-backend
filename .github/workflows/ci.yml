@@ -61,6 +61,10 @@ jobs:
     # Solo si los tests pasaron: no se construye una imagen con tests rotos.
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Necesario para publicar el informe de Grype en la pestaña Security.
+      security-events: write
     steps:
       - name: Descargar el código
         uses: actions/checkout@v7
@@ -113,6 +117,34 @@ jobs:
 
           echo "La aplicación no respondió a tiempo"
           exit 1
+
+      # Grype revisa la imagen ya construida: sistema base, JVM y librerías empaquetadas.
+      # Solo informa (fail-build: false): la imagen base la define el Dockerfile de la cátedra.
+      - name: Analizar la imagen con Grype
+        id: grype
+        uses: anchore/scan-action@v7
+        with:
+          image: expiry-control:ci
+          fail-build: false
+          output-format: sarif
+
+      - name: Publicar el informe de Grype
+        if: always() && steps.grype.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: grype-imagen
+
+      - name: Resumir el informe de Grype
+        if: always() && steps.grype.outputs.sarif != ''
+        run: |
+          total="$(jq '[.runs[].results[]] | length' "${{ steps.grype.outputs.sarif }}")"
+          {
+            echo "### Grype: vulnerabilidades conocidas en la imagen"
+            echo ""
+            echo "Hallazgos: **$total**. El detalle está en la pestaña Security del repositorio."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Grype informó $total hallazgos"
 
       - name: Comprobar que los endpoints siguen protegidos
         run: |

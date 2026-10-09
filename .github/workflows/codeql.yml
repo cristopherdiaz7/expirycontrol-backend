@@ -1,0 +1,52 @@
+name: CodeQL
+
+# Análisis estático del código fuente: busca patrones de código vulnerable.
+# Los resultados aparecen en la pestaña Security del repositorio.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Una vez por semana, para detectar problemas nuevos aunque el código no cambie.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analizar código Java
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Necesario para publicar los resultados en la pestaña Security.
+      security-events: write
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      - name: Instalar Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Preparar CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+
+      # CodeQL observa la compilación para entender el código, incluido el que genera Lombok.
+      - name: Compilar
+        run: |
+          chmod +x mvnw
+          ./mvnw -B -DskipTests compile
+
+      - name: Analizar
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:java-kotlin"

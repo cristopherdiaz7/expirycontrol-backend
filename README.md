@@ -25,6 +25,8 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Migraciones de la base](#migraciones-de-la-base)
 - [Imagen Docker](#imagen-docker)
 - [Integración continua](#integración-continua)
+- [Análisis de seguridad](#análisis-de-seguridad)
+- [Observabilidad](#observabilidad)
 - [Tests](#tests)
 - [Estructura del proyecto](#estructura-del-proyecto)
 - [Problemas frecuentes](#problemas-frecuentes)
@@ -140,6 +142,7 @@ Se leen del archivo `.env` o del entorno del sistema.
 | `JWT_EXPIRATION_MS` | No | `3600000` (1 hora) | Duración del token en milisegundos |
 | `DB_POOL_MAX_SIZE` | No | `5` | Máximo de conexiones simultáneas a la base (HikariCP) |
 | `DB_POOL_MIN_IDLE` | No | `1` | Conexiones que se mantienen abiertas sin uso |
+| `APP_COMMIT` | No | `local` | Commit desplegado; lo muestra `/actuator/info` |
 | `CORS_ALLOWED_ORIGINS` | Solo en `prod` | Los cuatro orígenes locales de Expo Web | Orígenes permitidos, separados por coma |
 | `SPRING_PROFILES_ACTIVE` | No | `dev` | Perfil activo. Se define en el entorno del sistema, **no** en `.env` |
 
@@ -535,7 +538,17 @@ Métodos permitidos: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`. Cabeceras permit
 | `/actuator/health/liveness` | Que el proceso está vivo | Sonda de vida: si falla, la plataforma reinicia el contenedor |
 | `/actuator/health/readiness` | Que puede recibir tráfico, incluida la conexión a la base | Sonda de disponibilidad: si falla, deja de recibir peticiones |
 
-No muestra detalles internos. Es el único endpoint de gestión publicado: el resto (`/actuator/env`, `/actuator/metrics` y demás) no está expuesto y responde `401` sin token y `404` con token.
+No muestra detalles internos.
+
+`GET /actuator/info` también es público e informa qué versión está corriendo:
+
+```json
+{"app":{"name":"expiry-control","version":"0.0.1-SNAPSHOT","commit":"abc1234"}}
+```
+
+La versión sale del `pom.xml` al compilar. El commit lo informa el despliegue mediante la variable de entorno `APP_COMMIT`; sin ella figura `local`.
+
+Son los dos únicos endpoints de gestión publicados: el resto (`/actuator/env`, `/actuator/metrics` y demás) no está expuesto y responde `401` sin token y `404` con token.
 
 ## Migraciones de la base
 
@@ -622,7 +635,70 @@ El segundo job depende del primero (`needs: test`): nunca se construye una image
 
 **Reporte de tests.** Si algún test falla, el reporte queda disponible para descargar desde la ejecución durante 7 días.
 
+**Análisis de la imagen.** Después de la prueba de arranque, Grype revisa la imagen y publica su informe (ver [Análisis de seguridad](#análisis-de-seguridad)).
+
 El pipeline todavía no publica la imagen ni despliega.
+
+## Análisis de seguridad
+
+Cada herramienta mira una cosa distinta, por eso se complementan en lugar de repetirse.
+
+| Herramienta | Qué analiza | Qué encuentra | Cuándo corre | Estado en este repo |
+|---|---|---|---|---|
+| **CodeQL** | El código fuente propio | Patrones de código vulnerable: inyecciones, datos sin validar, manejo inseguro de datos | En cada push y Pull Request a `master`, y una vez por semana | Activo: [`codeql.yml`](.github/workflows/codeql.yml) |
+| **Grype** | La imagen Docker ya construida | Vulnerabilidades conocidas (CVE) en el sistema base, la JVM y las librerías empaquetadas | En cada ejecución del pipeline, después de construir la imagen | Activo, en modo informe: [`ci.yml`](.github/workflows/ci.yml) |
+| **Dependabot** | Las dependencias declaradas en el `pom.xml` | Librerías con vulnerabilidades conocidas | De forma continua, por GitHub | Alertas activas |
+| **Detección de secretos** | Lo que se sube al repositorio | Contraseñas, tokens y claves escritos en el código | En cada push; bloquea la subida | Activa |
+| **Snyk** | Dependencias y, según el plan, también código e imágenes | Vulnerabilidades conocidas, con la versión que las corrige | — | No instalado |
+
+Los resultados de CodeQL y Grype se ven en la pestaña **Security → Code scanning** del repositorio; los de Dependabot, en **Security → Dependabot**.
+
+### Diferencias en pocas palabras
+
+- **CodeQL** hace análisis estático (SAST): entiende el código y sigue el recorrido de los datos. Encuentra errores propios, aunque todas las librerías estén al día.
+- **Grype** y **Dependabot** hacen análisis de composición (SCA): comparan versiones contra bases de vulnerabilidades conocidas. No miran cómo está escrito el código. Dependabot lo hace sobre el `pom.xml`; Grype, sobre la imagen terminada, que además incluye el sistema operativo y la JVM.
+- **Snyk** cubre ese mismo terreno de dependencias (y, en planes pagos, parte del de código e imágenes) como servicio externo.
+
+### Por qué Snyk no está instalado
+
+Requiere crear una cuenta y guardar un token en el repositorio. Lo que aportaría sobre las dependencias ya lo cubren Dependabot y Grype, que no necesitan credenciales. Sumarlo duplicaría hallazgos sin agregar cobertura.
+
+### Por qué Grype solo informa
+
+Grype no detiene el pipeline (`fail-build: false`). La imagen base la define el `Dockerfile` de la cátedra, que no se modifica: un hallazgo en el sistema base o en la JVM no se podría corregir desde este repositorio. El informe queda a la vista para evaluarlo.
+
+## Observabilidad
+
+| Qué | Dónde se ve | Qué muestra |
+|---|---|---|
+| **Logs de la aplicación** | Salida estándar del contenedor | Arranque, migraciones de Flyway, pool de conexiones, avisos y errores |
+| **Registro de accesos** (solo perfil `prod`) | Salida estándar, líneas que empiezan con `ACCESO` | Método, ruta, código de respuesta y duración de cada petición |
+| **Salud** | `/actuator/health` y sus sondas | Si la aplicación y la base responden |
+| **Versión** | `/actuator/info` | Versión y commit desplegados |
+| **Métricas de la plataforma** | Azure (al desplegar) | CPU, memoria, cantidad de peticiones, reinicios y réplicas |
+
+Ejemplo del registro de accesos:
+
+```
+ACCESO POST /login 200 257ms
+ACCESO GET /products 401 18ms
+```
+
+Todo va por salida estándar, sin archivos de log: la plataforma donde corre el contenedor es la que recoge, guarda y permite consultar los logs.
+
+### Qué no aparece en los logs
+
+Se comprobó usando la imagen y buscando después en sus logs los valores utilizados:
+
+- No aparecen la clave JWT, la contraseña de la base, las contraseñas de los usuarios ni los tokens emitidos.
+- No aparecen emails ni cabeceras `Authorization`.
+- El registro de accesos guarda la ruta sin sus parámetros.
+- En producción no se registran las sentencias SQL (solo en `dev`).
+
+### Qué no está implementado
+
+- **Métricas internas de la aplicación** (`/actuator/metrics`): no se publican. La aplicación no tiene roles, así que cualquier usuario registrado podría leerlas. Las métricas de la plataforma cubren lo necesario.
+- **Trazas y Application Insights:** la forma habitual de usarlo en Java requiere agregar un archivo a la imagen, lo que obligaría a modificar el `Dockerfile`.
 
 ## Tests
 
@@ -643,7 +719,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `FullFlowIntegrationTest` | 9 | Recorrido completo de un usuario, aislamiento entre dos usuarios, casos que cruzan funcionalidades y entradas fuera de los límites |
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
-| `HealthIntegrationTest` | 6 | Endpoint de salud público y resto de los endpoints de gestión no expuestos |
+| `HealthIntegrationTest` | 8 | Endpoints de salud y de versión públicos, y resto de los endpoints de gestión no expuestos |
 | `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
 | `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
 | `NotificationServiceTest` | 11 | Categorías sin duplicados, límites de días y estado de lectura |
@@ -652,7 +728,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `UserServiceTest` | 6 | Registro y login |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 114 tests.
+Total: 116 tests.
 
 Los cinco tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 

@@ -35,8 +35,25 @@ class HealthIntegrationTest extends IntegrationTestSupport {
     }
 
     @Test
+    void infoIsPublicAndShowsVersionAndCommit() throws Exception {
+        mockMvc.perform(get("/actuator/info"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.app.name").value("expiry-control"))
+                .andExpect(jsonPath("$.app.version").isNotEmpty())
+                // Sin la variable APP_COMMIT (como en los tests) informa "local".
+                .andExpect(jsonPath("$.app.commit").value("local"));
+    }
+
+    @Test
+    void infoShowsNothingElse() throws Exception {
+        mockMvc.perform(get("/actuator/info"))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$.app.length()").value(3));
+    }
+
+    @Test
     void otherManagementEndpointsAreNotPublic() throws Exception {
-        for (String path : new String[] {"/actuator", "/actuator/env", "/actuator/metrics", "/actuator/beans", "/actuator/info"}) {
+        for (String path : new String[] {"/actuator", "/actuator/env", "/actuator/metrics", "/actuator/beans", "/actuator/loggers"}) {
             mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
         }
     }
