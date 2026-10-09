@@ -541,6 +541,8 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 
 Total: 108 tests.
 
+Los cinco tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
+
 El resultado de la validación de conjunto, incluido el recorrido en la app web, está en [VALIDACION.md](VALIDACION.md).
 
 ## Estructura del proyecto

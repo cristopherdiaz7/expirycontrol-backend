@@ -9,65 +9,24 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.example.demo.model.Product;
 import com.example.demo.model.User;
-import com.example.demo.repository.ProductRepository;
-import com.example.demo.repository.UserRepository;
-import com.example.demo.security.JwtService;
-import jakarta.servlet.Filter;
-import java.time.LocalDate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
 
-@SpringBootTest
-@ActiveProfiles("test")
-class ProductApiIntegrationTest {
+class ProductApiIntegrationTest extends IntegrationTestSupport {
 
     private static final String VALID_PRODUCT = """
             {"name":"  Leche  ","description":"Entera","category":"Lácteos","quantity":12,"expirationDate":"2030-01-15","unitPrice":1500.50}
             """;
 
-    @Autowired
-    private WebApplicationContext context;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private ProductRepository productRepository;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    @Autowired
-    private JwtService jwtService;
-
-    private MockMvc mockMvc;
     private User user;
     private String token;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context)
-                .addFilters(context.getBean("springSecurityFilterChain", Filter.class))
-                .build();
-
-        productRepository.deleteAll();
-        userRepository.deleteAll();
-
-        user = userRepository.save(User.builder()
-                .name("Usuario")
-                .email("usuario@example.com")
-                .password(passwordEncoder.encode("secreta123"))
-                .build());
-        token = jwtService.generateToken(user.getEmail(), user.getId(), user.getName());
+        user = saveUser("Usuario", "usuario@example.com");
+        token = tokenFor(user);
     }
 
     // --- CRUD ---
@@ -89,7 +48,7 @@ class ProductApiIntegrationTest {
 
     @Test
     void getByIdReturns200ForOwnProduct() throws Exception {
-        Product product = saveProduct("Yogur");
+        Product product = saveProduct("Yogur", user);
 
         mockMvc.perform(authorized(get("/products/" + product.getId())))
                 .andExpect(status().isOk())
@@ -147,7 +106,7 @@ class ProductApiIntegrationTest {
 
     @Test
     void invalidProductOnUpdateReturns400AndKeepsData() throws Exception {
-        Product product = saveProduct("Yogur");
+        Product product = saveProduct("Yogur", user);
 
         mockMvc.perform(authorized(put("/products/" + product.getId()))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -191,17 +150,6 @@ class ProductApiIntegrationTest {
     }
 
     private MockHttpServletRequestBuilder authorized(MockHttpServletRequestBuilder request) {
-        return request.header("Authorization", "Bearer " + token);
-    }
-
-    private Product saveProduct(String name) {
-        return productRepository.save(Product.builder()
-                .name(name)
-                .description("Descripción")
-                .category("Lácteos")
-                .quantity(3)
-                .expirationDate(LocalDate.now().plusDays(10))
-                .user(user)
-                .build());
+        return authorized(request, token);
     }
 }
