@@ -181,7 +181,7 @@ Rutas públicas: `/register` y `/login`. Todas las demás requieren token.
 
 | Método | Ruta | Auth | Cuerpo | Respuesta |
 |---|---|---|---|---|
-| POST | `/register` | No | `name`, `email`, `password` (mínimo 6 caracteres) | `201` con `id`, `name`, `email` · `400` datos inválidos · `409` email ya registrado |
+| POST | `/register` | No | `name` y `email` (hasta 255 caracteres), `password` (de 6 a 72 caracteres) | `201` con `id`, `name`, `email` · `400` datos inválidos · `409` email ya registrado |
 | POST | `/login` | No | `email`, `password` | `200` con `token` y `user` · `400` datos inválidos · `401` credenciales incorrectas |
 
 ### Productos
@@ -189,7 +189,7 @@ Rutas públicas: `/register` y `/login`. Todas las demás requieren token.
 | Método | Ruta | Parámetros | Respuesta |
 |---|---|---|---|
 | POST | `/products` | Cuerpo: producto | `201` con el producto creado · `400` |
-| GET | `/products` | — | `200` con la lista del usuario |
+| GET | `/products` | — | `200` con la lista del usuario, en orden de alta |
 | GET | `/products/{id}` | — | `200` con el producto · `404` |
 | PUT | `/products/{id}` | Cuerpo: producto | `200` con el producto actualizado · `400` · `404` |
 | DELETE | `/products/{id}` | `today` (opcional) | `204` sin cuerpo · `404` |
@@ -224,12 +224,12 @@ Ver [Precios y pérdidas](#precios-y-pérdidas) para las reglas.
 
 | Campo | Tipo | Regla |
 |---|---|---|
-| `name` | texto | Obligatorio |
-| `description` | texto | Obligatorio |
-| `category` | texto | Obligatorio |
-| `quantity` | entero | Obligatorio, 0 o mayor |
+| `name` | texto | Obligatorio, hasta 255 caracteres |
+| `description` | texto | Obligatorio, hasta 255 caracteres |
+| `category` | texto | Obligatorio, hasta 255 caracteres |
+| `quantity` | entero | Obligatorio, entre 0 y 1.000.000 |
 | `expirationDate` | fecha `AAAA-MM-DD` | Obligatorio |
-| `unitPrice` | decimal | Obligatorio, 0 o mayor, hasta 2 decimales. Precio unitario en pesos argentinos (ARS) |
+| `unitPrice` | decimal | Obligatorio, 0 o mayor, hasta 10 dígitos enteros y 2 decimales. Precio unitario en pesos argentinos (ARS) |
 
 La respuesta incluye además el `id`. En los productos creados antes de que existiera el precio, `unitPrice` es `null` hasta que se editen.
 
@@ -528,6 +528,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 
 | Clase | Tests | Qué cubre |
 |---|---|---|
+| `FullFlowIntegrationTest` | 9 | Recorrido completo de un usuario, aislamiento entre dos usuarios, casos que cruzan funcionalidades y entradas fuera de los límites |
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
 | `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
@@ -538,7 +539,9 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `UserServiceTest` | 6 | Registro y login |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 99 tests.
+Total: 108 tests.
+
+El resultado de la validación de conjunto, incluido el recorrido en la app web, está en [VALIDACION.md](VALIDACION.md).
 
 ## Estructura del proyecto
 
@@ -599,6 +602,14 @@ docker exec expiry-control-postgres psql -U expiry_user -d expiry_control -c "AL
 **`Connection refused` al conectar con la base**
 
 El contenedor no está corriendo. Ejecutar `docker compose up -d` y verificar con `docker compose ps`.
+
+**`GET /losses` falla con un error interno en una base creada antes de la validación final**
+
+La columna del importe quedó con el tamaño anterior. Ampliarla una vez:
+
+```bash
+docker exec expiry-control-postgres psql -U expiry_user -d expiry_control -c "ALTER TABLE losses ALTER COLUMN total_amount TYPE numeric(19,2)"
+```
 
 **El puerto 8080 está en uso**
 

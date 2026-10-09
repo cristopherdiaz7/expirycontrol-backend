@@ -46,6 +46,15 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    // Mismo formato que los errores de validación de campos.
+    @ExceptionHandler(PasswordTooLongException.class)
+    public ResponseEntity<Map<String, Object>> handlePasswordTooLong(PasswordTooLongException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "error", "Datos de entrada inválidos o faltantes",
+                "details", Map.of("password", ex.getMessage())
+        ));
+    }
+
     @ExceptionHandler(InvalidClientDateException.class)
     public ResponseEntity<Map<String, String>> handleInvalidClientDate(InvalidClientDateException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
