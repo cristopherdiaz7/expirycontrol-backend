@@ -40,6 +40,8 @@ public class SecurityConfig {
                         .requestMatchers("/register", "/login").permitAll()
                         // Salud para las sondas de la plataforma: solo informa si la app responde.
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                        // Versión desplegada: no expone datos internos.
+                        .requestMatchers("/actuator/info").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
