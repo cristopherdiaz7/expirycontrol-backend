@@ -12,7 +12,7 @@ class HealthIntegrationTest extends IntegrationTestSupport {
     void healthIsPublicAndReportsUp() throws Exception {
         mockMvc.perform(get("/actuator/health"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("ROTO-A-PROPOSITO"));
+                .andExpect(jsonPath("$.status").value("UP"));
     }
 
     @Test
