@@ -25,6 +25,7 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Migraciones de la base](#migraciones-de-la-base)
 - [Imagen Docker](#imagen-docker)
 - [Integración continua](#integración-continua)
+- [Despliegue continuo en Azure](#despliegue-continuo-en-azure)
 - [Análisis de seguridad](#análisis-de-seguridad)
 - [Observabilidad](#observabilidad)
 - [Tests](#tests)
@@ -625,19 +626,144 @@ El workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre en GitH
 | Job | Qué hace | Si falla |
 |---|---|---|
 | **Tests y jar** | Instala Java 21, ejecuta todos los tests, genera el jar y comprueba que existe `target/app.jar` | El job siguiente no se ejecuta |
-| **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | El pipeline queda en rojo |
+| **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | Los jobs siguientes no se ejecutan |
+| **Publicar imagen** | Solo en `master`: sube la imagen al registro de Azure | No se despliega |
+| **Desplegar en Azure** | Solo en `master`: actualiza la aplicación y comprueba la versión | El pipeline queda en rojo |
 
-El segundo job depende del primero (`needs: test`): nunca se construye una imagen a partir de un código con tests rotos.
+Cada job depende del anterior (`needs`): nunca se construye una imagen a partir de un código con tests rotos, ni se despliega una imagen que no arrancó. Los dos últimos se explican en [Despliegue continuo en Azure](#despliegue-continuo-en-azure).
 
 **Prueba de arranque.** Dentro del pipeline se levanta un PostgreSQL vacío y se arranca la imagen con el perfil `prod`, como en producción. Se comprueba que `/actuator/health` responde `UP` y que `/products` sigue respondiendo `401` sin token. Detecta lo que los tests no ven: una imagen que no compila, una migración que falla o una variable que falta.
 
-**Sin secretos.** El workflow no usa ninguna credencial guardada. La contraseña de la base y la clave JWT de la prueba se generan al azar en cada ejecución. Su único permiso es leer el código (`contents: read`).
+**Sin secretos en las pruebas.** Los dos primeros jobs no usan ninguna credencial guardada. La contraseña de la base y la clave JWT de la prueba se generan al azar en cada ejecución. El permiso por defecto del workflow es leer el código (`contents: read`); cada job pide solo lo que le falta.
 
 **Reporte de tests.** Si algún test falla, el reporte queda disponible para descargar desde la ejecución durante 7 días.
 
 **Análisis de la imagen.** Después de la prueba de arranque, Grype revisa la imagen y publica su informe (ver [Análisis de seguridad](#análisis-de-seguridad)).
 
-El pipeline todavía no publica la imagen ni despliega.
+## Despliegue continuo en Azure
+
+Cada cambio que llega a `master` se publica y se despliega solo. En un Pull Request los jobs de publicación y despliegue no corren: ahí solo se prueba.
+
+```
+push a master → Tests y jar → Imagen Docker → Publicar imagen → Desplegar en Azure
+```
+
+URL pública: `https://ca-expirycontrol-backend.jollysea-7a4f1f80.northcentralus.azurecontainerapps.io`
+
+### Recursos
+
+Todos están en la suscripción *Azure for Students*, dentro del grupo de recursos `rg-expirycontrol` (región `northcentralus`). Un grupo de recursos es una carpeta lógica: permite ver, dar permisos y borrar todo junto.
+
+| Recurso | Nombre | Para qué |
+|---|---|---|
+| Container Registry (ACR) | `expirycontrolacr` | Guarda las imágenes Docker, privadas |
+| Entorno de Container Apps | `cae-expirycontrol` | Red y logs compartidos donde corre la aplicación |
+| Container App | `ca-expirycontrol-backend` | Ejecuta el contenedor y le da HTTPS público |
+| PostgreSQL Flexible Server | `psql-expirycontrol-…` | Base de datos administrada |
+| Log Analytics | `log-expirycontrol` | Guarda los logs del contenedor durante 30 días |
+
+La aplicación corre con 0,5 CPU y 1 GB de memoria, en una sola réplica. No se escala a más porque el bloqueo por usuario (`UserLocks`) vive en la memoria del proceso.
+
+### Una sola imagen
+
+La imagen se construye una vez, en el job **Imagen Docker**. Esa misma imagen, la que pasó la prueba de arranque, es la que se publica y se despliega: no se vuelve a compilar. Lo que cambia entre entornos es la configuración, no la imagen.
+
+### Versionado de imágenes
+
+Cada imagen se sube con dos etiquetas:
+
+| Etiqueta | Ejemplo | Uso |
+|---|---|---|
+| `sha-<commit>` | `sha-178bdfa` | Fija, identifica el código exacto. Es la que se despliega |
+| `latest` | `latest` | Se mueve con cada publicación. Solo de referencia |
+
+No se despliega `latest` porque no dice qué versión está corriendo ni permite volver a la anterior.
+
+Para saber qué versión está activa, sin entrar a Azure:
+
+```bash
+curl https://ca-expirycontrol-backend.jollysea-7a4f1f80.northcentralus.azurecontainerapps.io/actuator/info
+# {"app":{"name":"expiry-control","version":"0.0.1-SNAPSHOT","commit":"178bdfa"}}
+```
+
+El job de despliegue hace esa misma consulta: termina en verde solo cuando la URL pública responde con salud `UP` y con el commit recién desplegado.
+
+### Identidades y permisos
+
+No hay contraseñas de Azure guardadas en GitHub ni usuario administrador en el registro.
+
+| Quién | Qué es | Permisos |
+|---|---|---|
+| GitHub Actions | *Service Principal* `gh-expirycontrol-backend` | `AcrPush` sobre el registro, `Contributor` solo sobre la Container App, `Reader` sobre el grupo |
+| La aplicación | Identidad administrada asignada por el sistema | `AcrPull` sobre el registro |
+
+Un Service Principal es una identidad para programas, no para personas. El pipeline inicia sesión con **OIDC**: GitHub emite un token de corta duración que dice de qué repositorio y rama viene, y Azure lo acepta porque hay una *credencial federada* que confía únicamente en la rama `master` de este repositorio. Por eso el despliegue no funciona desde otra rama ni desde un fork.
+
+La aplicación descarga su imagen con su propia identidad administrada, así que tampoco necesita credenciales del registro.
+
+### Secretos y configuración
+
+| Dónde | Qué hay | Por qué ahí |
+|---|---|---|
+| GitHub Secrets | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | Identificadores para el inicio de sesión OIDC. No son contraseñas |
+| `ci.yml` (`env`) | Nombres del registro, del grupo y de la aplicación | No son secretos |
+| Secretos de la Container App | `db-password`, `jwt-secret` | Los necesita la aplicación al ejecutarse, no el pipeline |
+| Variables de la Container App | `SPRING_PROFILES_ACTIVE`, `DB_URL`, `POSTGRES_USER`, `CORS_ALLOWED_ORIGINS`, `APP_COMMIT`… | Configuración del entorno |
+
+La contraseña de la base y la clave JWT nunca pasan por GitHub: el pipeline solo cambia la imagen y `APP_COMMIT`.
+
+**Key Vault** no se usa. Sería el paso siguiente si hubiera más aplicaciones o hiciera falta rotar y auditar secretos desde un solo lugar: la Container App puede leer un secreto de Key Vault con su identidad administrada en lugar de guardarlo ella misma.
+
+### Red
+
+La Container App recibe tráfico público solo por HTTPS; las peticiones HTTP se redirigen. Hacia adentro, la plataforma le habla al contenedor por el puerto 8080.
+
+La base tiene SSL obligatorio (`sslmode=require`) y un firewall que solo admite conexiones desde servicios de Azure; no se puede acceder desde una computadora cualquiera. La limitación es que esa regla admite a cualquier servicio de Azure, no solo a esta aplicación: lo que protege la base es la contraseña y el cifrado. La alternativa más estricta es una red virtual con acceso privado, que no se configuró por costo y complejidad.
+
+### Sondas de salud
+
+Azure consulta a la aplicación para decidir qué hacer con ella:
+
+| Sonda | Endpoint | Efecto |
+|---|---|---|
+| Inicio | `/actuator/health/liveness` | Espera a que la aplicación termine de arrancar |
+| Vida | `/actuator/health/liveness` | Si falla, reinicia el contenedor |
+| Disponibilidad | `/actuator/health/readiness` | Si falla (por ejemplo, sin base), deja de enviarle tráfico |
+
+Al desplegar, la versión anterior sigue atendiendo hasta que la nueva está lista.
+
+### Operación
+
+Requiere la [CLI de Azure](https://learn.microsoft.com/cli/azure/) con sesión iniciada (`az login`).
+
+```bash
+# Ver los logs
+az containerapp logs show -g rg-expirycontrol -n ca-expirycontrol-backend --tail 50
+
+# Ver las versiones (revisiones) y cuál recibe tráfico
+az containerapp revision list -g rg-expirycontrol -n ca-expirycontrol-backend --all -o table
+
+# Reiniciar
+az containerapp revision restart -g rg-expirycontrol -n ca-expirycontrol-backend --revision <revisión>
+
+# Detener y volver a iniciar la aplicación
+az containerapp revision deactivate -g rg-expirycontrol -n ca-expirycontrol-backend --revision <revisión>
+az containerapp revision activate   -g rg-expirycontrol -n ca-expirycontrol-backend --revision <revisión>
+
+# Detener y volver a iniciar la base
+az postgres flexible-server stop  -g rg-expirycontrol -n <servidor>
+az postgres flexible-server start -g rg-expirycontrol -n <servidor>
+
+# Volver a una versión anterior: se despliega su etiqueta
+az containerapp update -g rg-expirycontrol -n ca-expirycontrol-backend \
+  --image expirycontrolacr.azurecr.io/expirycontrol-backend:sha-<commit> \
+  --set-env-vars APP_COMMIT=<commit>
+
+# Eliminar todo
+az group delete -n rg-expirycontrol
+```
+
+Borrar el grupo elimina todos los recursos y sus datos, y detiene el gasto. El Service Principal no está dentro del grupo: se borra aparte con `az ad app delete --id <AZURE_CLIENT_ID>`.
 
 ## Análisis de seguridad
 

@@ -1,6 +1,7 @@
 name: CI
 
 # Integración continua: tests, jar e imagen Docker en cada cambio.
+# Despliegue continuo: en master, además, se publica la imagen y se despliega en Azure.
 on:
   push:
     branches: [master]
@@ -8,14 +9,22 @@ on:
     branches: [master]
   workflow_dispatch:
 
-# El workflow solo necesita leer el código.
+# Por defecto el workflow solo puede leer el código. Cada job pide lo que le falte.
 permissions:
   contents: read
 
 # Si llega un cambio nuevo a la misma rama, se cancela la ejecución anterior.
+# En master no se cancela: un despliegue no se interrumpe por la mitad.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+# Nombres de los recursos de Azure. No son secretos: solo identifican dónde se despliega.
+env:
+  ACR_NAME: expirycontrolacr
+  IMAGE_NAME: expirycontrol-backend
+  RESOURCE_GROUP: rg-expirycontrol
+  CONTAINER_APP: ca-expirycontrol-backend
 
 jobs:
   test:
@@ -152,6 +161,128 @@ jobs:
           echo "GET /products sin token: $status"
           test "$status" = "401"
 
+      # La imagen que se publica es esta misma, la que pasó la prueba de arranque:
+      # se construye una sola vez y no se vuelve a compilar para desplegar.
+      - name: Exportar la imagen probada
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        run: docker save expiry-control:ci | gzip > imagen.tar.gz
+
+      - name: Guardar la imagen para el job de publicación
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: imagen
+          path: imagen.tar.gz
+          retention-days: 1
+
       - name: Mostrar los logs de la aplicación
         if: always()
         run: docker logs app 2>&1 | tail -n 60 || true
+
+  publish:
+    name: Publicar imagen
+    # Solo en master y solo si la imagen pasó todas las comprobaciones.
+    needs: docker
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Permite pedir a GitHub el token OIDC con el que se inicia sesión en Azure.
+      id-token: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - name: Recuperar la imagen probada
+        uses: actions/download-artifact@v8
+        with:
+          name: imagen
+
+      # La etiqueta sale del commit: cada imagen se puede rastrear hasta su código.
+      - name: Calcular la etiqueta
+        id: tag
+        run: |
+          commit="${GITHUB_SHA::7}"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-$commit" >> "$GITHUB_OUTPUT"
+
+      # Inicio de sesión sin contraseña (OIDC). Los tres valores son identificadores.
+      - name: Iniciar sesión en Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Iniciar sesión en el registro
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Subir la imagen al registro
+        run: |
+          set -euo pipefail
+          repo="$ACR_NAME.azurecr.io/$IMAGE_NAME"
+          gunzip -c imagen.tar.gz | docker load
+          docker tag expiry-control:ci "$repo:${{ steps.tag.outputs.tag }}"
+          docker tag expiry-control:ci "$repo:latest"
+          docker push "$repo:${{ steps.tag.outputs.tag }}"
+          docker push "$repo:latest"
+          echo "Imagen publicada: \`$repo:${{ steps.tag.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Desplegar en Azure
+    needs: publish
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Iniciar sesión en Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Instalar la extensión de Container Apps
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      # Se despliega la etiqueta del commit, nunca "latest": así se sabe qué versión corre.
+      # Solo cambian la imagen y APP_COMMIT; los secretos y el resto de la configuración
+      # viven en la Container App y no pasan por el pipeline.
+      - name: Actualizar la aplicación
+        run: |
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:${{ needs.publish.outputs.tag }}" \
+            --set-env-vars "APP_COMMIT=${{ needs.publish.outputs.commit }}" \
+            --only-show-errors --output none
+
+      # El despliegue se da por bueno cuando la URL pública responde con salud UP
+      # y /actuator/info informa el commit recién desplegado.
+      - name: Comprobar la versión desplegada
+        run: |
+          set -euo pipefail
+          fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_APP" \
+            --query properties.configuration.ingress.fqdn --output tsv)"
+          url="https://$fqdn"
+          esperado="${{ needs.publish.outputs.commit }}"
+
+          for i in $(seq 1 40); do
+            info="$(curl -fsS --max-time 10 "$url/actuator/info" 2> /dev/null || true)"
+            salud="$(curl -fsS --max-time 10 "$url/actuator/health" 2> /dev/null || true)"
+            if echo "$info" | grep -q "\"commit\":\"$esperado\"" && echo "$salud" | grep -q '"status":"UP"'; then
+              echo "Versión $esperado desplegada y con salud UP"
+              {
+                echo "### Despliegue correcto"
+                echo ""
+                echo "Versión **$esperado** en $url"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "La versión $esperado no quedó activa a tiempo. Última respuesta de /actuator/info: $info"
+          exit 1
