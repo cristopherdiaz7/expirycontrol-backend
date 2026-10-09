@@ -31,7 +31,7 @@ import org.springframework.web.context.WebApplicationContext;
 class ProductApiIntegrationTest {
 
     private static final String VALID_PRODUCT = """
-            {"name":"  Leche  ","description":"Entera","category":"Lácteos","quantity":12,"expirationDate":"2030-01-15"}
+            {"name":"  Leche  ","description":"Entera","category":"Lácteos","quantity":12,"expirationDate":"2030-01-15","unitPrice":1500.50}
             """;
 
     @Autowired
@@ -81,7 +81,8 @@ class ProductApiIntegrationTest {
                 .andExpect(jsonPath("$.description").value("Entera"))
                 .andExpect(jsonPath("$.category").value("Lácteos"))
                 .andExpect(jsonPath("$.quantity").value(12))
-                .andExpect(jsonPath("$.expirationDate").value("2030-01-15"));
+                .andExpect(jsonPath("$.expirationDate").value("2030-01-15"))
+                .andExpect(jsonPath("$.unitPrice").value(1500.50));
 
         assertEquals(1, productRepository.findByUserId(user.getId()).size());
     }

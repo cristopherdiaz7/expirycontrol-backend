@@ -80,8 +80,10 @@ public class ProductController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@AuthenticationPrincipal User user,
-                                      @PathVariable Long id) {
-        productService.delete(user.getId(), id);
+                                      @PathVariable Long id,
+                                      @RequestParam(required = false)
+                                      @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today) {
+        productService.delete(user.getId(), id, today);
         return ResponseEntity.noContent().build();
     }
 }

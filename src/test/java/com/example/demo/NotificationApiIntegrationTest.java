@@ -242,7 +242,7 @@ class NotificationApiIntegrationTest {
     }
 
     private String productJson(String name, LocalDate expirationDate) {
-        return "{\"name\":\"" + name + "\",\"description\":\"Descripcion\",\"category\":\"Frescos\",\"quantity\":3,\"expirationDate\":\"" + expirationDate + "\"}";
+        return "{\"name\":\"" + name + "\",\"description\":\"Descripcion\",\"category\":\"Frescos\",\"quantity\":3,\"expirationDate\":\"" + expirationDate + "\",\"unitPrice\":100.00}";
     }
 
     private User saveUser(String name, String email) {
