@@ -60,7 +60,8 @@ public class Loss {
     @Column(nullable = false)
     private LocalDate expirationDate;
 
-    @Column(nullable = false, precision = 14, scale = 2)
+    // Alcanza para la cantidad máxima (1.000.000) por el precio máximo (10 dígitos enteros).
+    @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal totalAmount;
 
     @Column(nullable = false)

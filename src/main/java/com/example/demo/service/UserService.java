@@ -6,9 +6,11 @@ import com.example.demo.dto.UserRegisterRequest;
 import com.example.demo.dto.UserResponse;
 import com.example.demo.exception.EmailAlreadyExistsException;
 import com.example.demo.exception.InvalidCredentialsException;
+import com.example.demo.exception.PasswordTooLongException;
 import com.example.demo.model.User;
 import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
+import java.nio.charset.StandardCharsets;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -22,6 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class UserService implements UserDetailsService {
 
+    private static final int MAX_PASSWORD_BYTES = 72;
+
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
@@ -29,6 +33,11 @@ public class UserService implements UserDetailsService {
     @Transactional
     public UserResponse register(UserRegisterRequest request) {
         String normalizedEmail = request.getEmail().trim().toLowerCase();
+
+        // BCrypt solo admite 72 bytes; una contraseña con tildes o emojis puede superarlos con menos caracteres.
+        if (request.getPassword().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) {
+            throw new PasswordTooLongException("La contraseña es demasiado larga");
+        }
 
         if (userRepository.existsByEmail(normalizedEmail)) {
             throw new EmailAlreadyExistsException("El email ya se encuentra registrado");
