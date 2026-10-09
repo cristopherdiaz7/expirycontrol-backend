@@ -78,22 +78,30 @@ jobs:
       - name: Descargar el código
         uses: actions/checkout@v7
 
-      # Docker Hub limita las descargas anónimas y a veces rechaza a los servidores
-      # de GitHub (error 429). La imagen de Maven que pide el Dockerfile se trae
-      # antes desde un espejo público y se deja con su nombre original: es la misma
-      # imagen y el Dockerfile no se toca. Si los espejos fallan, se usa Docker Hub.
-      - name: Traer la imagen base de Maven desde un espejo
+      # Los registros públicos limitan las descargas anónimas y a veces rechazan a
+      # los servidores de GitHub (error 429). Las dos imágenes que necesita el job
+      # se piden a tres orígenes, en orden y con reintentos, y se dejan con su
+      # nombre original: son las mismas imágenes y el Dockerfile no se toca.
+      - name: Descargar las imágenes de Maven y PostgreSQL
         run: |
-          base="$(awk 'toupper($1) == "FROM" && $2 ~ /^maven:/ { print $2; exit }' Dockerfile)"
-          echo "Imagen base: $base"
-          for espejo in public.ecr.aws/docker/library mirror.gcr.io/library; do
-            if docker pull --quiet "$espejo/$base"; then
-              docker tag "$espejo/$base" "$base"
-              echo "Descargada desde $espejo"
-              exit 0
-            fi
-          done
-          echo "Ningún espejo respondió: la construcción la pedirá a Docker Hub"
+          traer() {
+            for ronda in 1 2 3; do
+              for origen in public.ecr.aws/docker/library mirror.gcr.io/library docker.io/library; do
+                if docker pull --quiet "$origen/$1" > /dev/null; then
+                  docker tag "$origen/$1" "$1"
+                  echo "$1 descargada desde $origen"
+                  return 0
+                fi
+              done
+              echo "Ningún origen entregó $1 (ronda $ronda)"
+              if [ "$ronda" -lt 3 ]; then sleep 20; fi
+            done
+            return 1
+          }
+
+          # La imagen de Maven es la que pide el Dockerfile de la cátedra.
+          traer "$(awk 'toupper($1) == "FROM" && $2 ~ /^maven:/ { print $2; exit }' Dockerfile)"
+          traer postgres:16
 
       - name: Construir la imagen con el Dockerfile de la cátedra
         run: |
@@ -120,7 +128,7 @@ jobs:
             -e POSTGRES_DB=expiry_control \
             -e POSTGRES_USER=expiry_user \
             -e POSTGRES_PASSWORD="$DB_PASSWORD" \
-            public.ecr.aws/docker/library/postgres:16
+            postgres:16
 
           echo "Esperando a PostgreSQL..."
           for i in $(seq 1 30); do
