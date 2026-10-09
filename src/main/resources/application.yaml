@@ -10,6 +10,12 @@ spring:
     username: ${POSTGRES_USER}
     password: ${POSTGRES_PASSWORD}
     driver-class-name: org.postgresql.Driver
+    # Pool de conexiones chico: una base pequeña admite pocas conexiones simultáneas.
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: 20000
+  # El esquema lo crean las migraciones de Flyway (db/migration); Hibernate solo lo verifica.
   jpa:
     hibernate:
       ddl-auto: validate
@@ -18,6 +24,21 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+
+# Actuator: solo se publica el endpoint de salud, sin detalles internos.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
 
 app:
   jwt:

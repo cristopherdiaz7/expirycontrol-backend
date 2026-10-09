@@ -38,6 +38,8 @@ public class SecurityConfig {
                         // un 400 o 500 de un usuario autenticado saldría como 401.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/register", "/login").permitAll()
+                        // Salud para las sondas de la plataforma: solo informa si la app responde.
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

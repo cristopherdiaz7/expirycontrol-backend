@@ -19,6 +19,9 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Precios y pérdidas](#precios-y-pérdidas)
 - [Errores](#errores)
 - [CORS](#cors)
+- [Salud](#salud)
+- [Migraciones de la base](#migraciones-de-la-base)
+- [Imagen Docker](#imagen-docker)
 - [Tests](#tests)
 - [Estructura del proyecto](#estructura-del-proyecto)
 - [Problemas frecuentes](#problemas-frecuentes)
@@ -28,8 +31,8 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 | Componente | Tecnología |
 |---|---|
 | Lenguaje | Java 21 |
-| Framework | Spring Boot 4.0.6 (Web MVC, Data JPA, Validation, Security) |
-| Base de datos | PostgreSQL 16 (en Docker) |
+| Framework | Spring Boot 4.0.6 (Web MVC, Data JPA, Validation, Security, Actuator) |
+| Base de datos | PostgreSQL 16 (en Docker), con migraciones de Flyway y pool de conexiones HikariCP |
 | Autenticación | JWT firmado con HS256 (JJWT 0.12.5), contraseñas con BCrypt |
 | Build | Maven (incluye wrapper, no hace falta instalarlo) |
 | Tests | JUnit 5, Mockito, MockMvc, H2 en memoria |
@@ -132,6 +135,8 @@ Se leen del archivo `.env` o del entorno del sistema.
 | `POSTGRES_DB` | No | `expiry_control` | Nombre de la base que crea Docker |
 | `DB_URL` | Solo en `prod` | `jdbc:postgresql://localhost:5433/expiry_control?options=-c%20TimeZone%3DUTC` | URL JDBC de la base |
 | `JWT_EXPIRATION_MS` | No | `3600000` (1 hora) | Duración del token en milisegundos |
+| `DB_POOL_MAX_SIZE` | No | `5` | Máximo de conexiones simultáneas a la base (HikariCP) |
+| `DB_POOL_MIN_IDLE` | No | `1` | Conexiones que se mantienen abiertas sin uso |
 | `CORS_ALLOWED_ORIGINS` | Solo en `prod` | Los cuatro orígenes locales de Expo Web | Orígenes permitidos, separados por coma |
 | `SPRING_PROFILES_ACTIVE` | No | `dev` | Perfil activo. Se define en el entorno del sistema, **no** en `.env` |
 
@@ -142,7 +147,8 @@ Si falta una variable obligatoria, la aplicación no arranca.
 | | `dev` (por defecto) | `prod` |
 |---|---|---|
 | Cómo se activa | No requiere nada | `SPRING_PROFILES_ACTIVE=prod` |
-| Tablas | Se crean y actualizan solas (`ddl-auto: update`) | Solo se verifica el esquema (`validate`); no se modifica |
+| Tablas | Las crean las migraciones de Flyway; Hibernate solo verifica | Igual |
+| Base anterior a las migraciones | Se registra como versión 1 sin modificarla | No aplica: se espera una base nueva |
 | SQL en consola | Sí | No |
 | `DB_URL` | Opcional | Obligatoria |
 | `CORS_ALLOWED_ORIGINS` | Opcional | Obligatoria |
@@ -512,6 +518,90 @@ CORS_ALLOWED_ORIGINS=http://localhost:8081,https://mi-app.example.com
 
 Métodos permitidos: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`. Cabeceras permitidas: `Authorization` y `Content-Type`.
 
+## Salud
+
+`GET /actuator/health` es público y responde si la aplicación está en condiciones de atender:
+
+```json
+{"groups":["liveness","readiness"],"status":"UP"}
+```
+
+| Ruta | Qué comprueba | Uso |
+|---|---|---|
+| `/actuator/health` | La aplicación y la base de datos | Consulta general |
+| `/actuator/health/liveness` | Que el proceso está vivo | Sonda de vida: si falla, la plataforma reinicia el contenedor |
+| `/actuator/health/readiness` | Que puede recibir tráfico, incluida la conexión a la base | Sonda de disponibilidad: si falla, deja de recibir peticiones |
+
+No muestra detalles internos. Es el único endpoint de gestión publicado: el resto (`/actuator/env`, `/actuator/metrics` y demás) no está expuesto y responde `401` sin token y `404` con token.
+
+## Migraciones de la base
+
+El esquema lo crea [Flyway](https://flywaydb.org/) a partir de los archivos de `src/main/resources/db/migration`. Hibernate ya no crea ni modifica tablas: solo verifica, al arrancar, que el esquema coincida con las entidades.
+
+- **Base vacía:** en el primer arranque Flyway ejecuta `V1__esquema_inicial.sql` y crea las tablas.
+- **Base local creada antes de las migraciones** (perfil `dev`): Flyway la registra como "ya en la versión 1" y no ejecuta nada sobre ella. No se pierde ningún dato.
+- **Cambios futuros en las entidades:** cada cambio necesita un archivo nuevo (`V2__descripcion.sql`, `V3__...`). Los archivos ya aplicados no se modifican.
+
+El historial queda en la tabla `flyway_schema_history`.
+
+## Imagen Docker
+
+El `Dockerfile` de la raíz construye la imagen de producción en tres etapas: descarga de dependencias, compilación y una imagen final mínima (*distroless*, sin shell) que ejecuta la aplicación con un usuario sin privilegios. Es el provisto por la cátedra y se usa sin modificaciones.
+
+### Construir
+
+```bash
+docker build -t expiry-control:local .
+```
+
+La construcción no ejecuta los tests (`-DskipTests`): hay que correrlos antes con `./mvnw test`.
+
+El archivo `.dockerignore` deja fuera del contexto el `.env`, la carpeta `target/` y el historial de Git, así que los secretos locales no entran a la imagen.
+
+### Ejecutar
+
+La imagen no trae configuración: todo llega por variables de entorno.
+
+```bash
+docker run --rm -p 8080:8080 \
+  --env-file .env \
+  -e SPRING_PROFILES_ACTIVE=prod \
+  -e DB_URL=jdbc:postgresql://host.docker.internal:5433/expiry_control \
+  -e CORS_ALLOWED_ORIGINS=http://localhost:8081 \
+  expiry-control:local
+```
+
+`host.docker.internal` es el nombre con el que un contenedor ve a la máquina donde corre Docker. `--env-file .env` aporta `POSTGRES_USER`, `POSTGRES_PASSWORD` y `JWT_SECRET` sin escribirlos en el comando.
+
+Si falta una variable obligatoria, el contenedor termina al arrancar e indica cuál es.
+
+### Variables recomendadas al desplegar
+
+| Variable | Valor | Para qué |
+|---|---|---|
+| `SPRING_PROFILES_ACTIVE` | `prod` | Activa el perfil de producción |
+| `SPRING_OUTPUT_ANSI_ENABLED` | `NEVER` | Quita los códigos de color de los logs, que en un visor de logs se ven como caracteres extraños |
+| `JAVA_TOOL_OPTIONS` | `-XX:MaxRAMPercentage=75` | Opciones de la JVM. La variable `JAVA_OPTS` del Dockerfile no tiene efecto, porque la imagen no tiene shell que la interprete; `JAVA_TOOL_OPTIONS` la lee la propia JVM |
+
+### Conexión con SSL
+
+Una base administrada, como Azure Database for PostgreSQL, exige conexión cifrada. Se indica en la propia URL:
+
+```
+DB_URL=jdbc:postgresql://<servidor>.postgres.database.azure.com:5432/<base>?sslmode=require
+```
+
+### Datos de referencia
+
+Medidos en una máquina de desarrollo; sirven de orientación.
+
+| Dato | Valor |
+|---|---|
+| Tamaño de la imagen | 386 MB |
+| Memoria en uso | Entre 270 y 350 MB |
+| Arranque con 512 MB de memoria | Correcto |
+| Cierre | Ordenado: termina las peticiones en curso y cierra el pool de conexiones |
+
 ## Tests
 
 ```bash
@@ -531,6 +621,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `FullFlowIntegrationTest` | 9 | Recorrido completo de un usuario, aislamiento entre dos usuarios, casos que cruzan funcionalidades y entradas fuera de los límites |
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
+| `HealthIntegrationTest` | 6 | Endpoint de salud público y resto de los endpoints de gestión no expuestos |
 | `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
 | `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
 | `NotificationServiceTest` | 11 | Categorías sin duplicados, límites de días y estado de lectura |
@@ -539,7 +630,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `UserServiceTest` | 6 | Registro y login |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 108 tests.
+Total: 114 tests.
 
 Los cinco tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 
@@ -549,7 +640,9 @@ El resultado de la validación de conjunto, incluido el recorrido en la app web,
 
 ```
 expirycontrol-backend/
-├── docker-compose.yml          PostgreSQL 16
+├── Dockerfile                  Imagen de producción (provisto por la cátedra)
+├── .dockerignore               Archivos que no entran a la imagen
+├── docker-compose.yml          PostgreSQL 16 para desarrollo
 ├── .env.example                Plantilla de variables de entorno
 ├── pom.xml                     Dependencias y build
 └── src/
@@ -567,7 +660,8 @@ expirycontrol-backend/
     │   └── resources/
     │       ├── application.yaml       Configuración común
     │       ├── application-dev.yaml   Perfil de desarrollo
-    │       └── application-prod.yaml  Perfil de producción
+    │       ├── application-prod.yaml  Perfil de producción
+    │       └── db/migration/          Migraciones de la base (Flyway)
     └── test/
         ├── java/com/example/demo/     Tests
         └── resources/
@@ -584,6 +678,14 @@ expirycontrol-backend/
 | `losses` | `id`, `user_id`, `product_id`, `product_name`, `quantity`, `unit_price`, `expiration_date`, `total_amount`, `recorded_at` | `product_id` único; pasa a `null` cuando se elimina el producto |
 
 ## Problemas frecuentes
+
+**`Schema validation: missing table` o `missing column` al arrancar**
+
+Las entidades no coinciden con la base. Si se cambió una entidad, falta la migración correspondiente en `db/migration`.
+
+**`Found non-empty schema(s) "public" but no schema history table` con el perfil `prod`**
+
+Se apuntó el perfil de producción a una base que ya tenía tablas creadas sin migraciones. `prod` espera una base nueva; el registro automático de bases existentes solo está activo en `dev`.
 
 **`Could not resolve placeholder 'JWT_SECRET'` al arrancar**
 

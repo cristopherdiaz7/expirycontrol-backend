@@ -1,0 +1,24 @@
+# Lo que no debe entrar al contexto de construcción de la imagen.
+
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+
+# Resultado de compilaciones locales (la imagen compila por su cuenta)
+target/
+
+# Control de versiones y editores
+.git
+.gitignore
+.gitattributes
+.github
+.idea
+.vscode
+*.iml
+
+# Archivos que la aplicación no necesita para ejecutarse
+docker-compose.yml
+Dockerfile
+.dockerignore
+*.md
