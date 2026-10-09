@@ -78,8 +78,31 @@ jobs:
       - name: Descargar el código
         uses: actions/checkout@v7
 
+      # Docker Hub limita las descargas anónimas y a veces rechaza a los servidores
+      # de GitHub (error 429). La imagen de Maven que pide el Dockerfile se trae
+      # antes desde un espejo público y se deja con su nombre original: es la misma
+      # imagen y el Dockerfile no se toca. Si los espejos fallan, se usa Docker Hub.
+      - name: Traer la imagen base de Maven desde un espejo
+        run: |
+          base="$(awk 'toupper($1) == "FROM" && $2 ~ /^maven:/ { print $2; exit }' Dockerfile)"
+          echo "Imagen base: $base"
+          for espejo in public.ecr.aws/docker/library mirror.gcr.io/library; do
+            if docker pull --quiet "$espejo/$base"; then
+              docker tag "$espejo/$base" "$base"
+              echo "Descargada desde $espejo"
+              exit 0
+            fi
+          done
+          echo "Ningún espejo respondió: la construcción la pedirá a Docker Hub"
+
       - name: Construir la imagen con el Dockerfile de la cátedra
-        run: docker build -t expiry-control:ci .
+        run: |
+          for intento in 1 2 3; do
+            if docker build -t expiry-control:ci .; then exit 0; fi
+            echo "Falló el intento $intento"
+            if [ "$intento" -lt 3 ]; then sleep 30; fi
+          done
+          exit 1
 
       # Arranca la imagen con el perfil prod contra un PostgreSQL vacío,
       # igual que en producción. Las credenciales se generan al azar en cada
@@ -97,7 +120,7 @@ jobs:
             -e POSTGRES_DB=expiry_control \
             -e POSTGRES_USER=expiry_user \
             -e POSTGRES_PASSWORD="$DB_PASSWORD" \
-            postgres:16
+            public.ecr.aws/docker/library/postgres:16
 
           echo "Esperando a PostgreSQL..."
           for i in $(seq 1 30); do
