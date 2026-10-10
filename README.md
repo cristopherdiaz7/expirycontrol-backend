@@ -650,6 +650,8 @@ push a master → Tests y jar → Imagen Docker → Publicar imagen → Desplega
 
 URL pública: `https://ca-expirycontrol-backend.jollysea-7a4f1f80.northcentralus.azurecontainerapps.io`
 
+El frontend está publicado en `https://stexpirycontrolweb.z14.web.core.windows.net` y se despliega desde su propio repositorio, [expirycontrol-frontend](https://github.com/cristopherdiaz7/expirycontrol-frontend). Su dirección está en `CORS_ALLOWED_ORIGINS` para que el navegador pueda llamar a la API.
+
 ### Recursos
 
 Todos están en la suscripción *Azure for Students*, dentro del grupo de recursos `rg-expirycontrol` (región `northcentralus`). Un grupo de recursos es una carpeta lógica: permite ver, dar permisos y borrar todo junto.
@@ -661,6 +663,7 @@ Todos están en la suscripción *Azure for Students*, dentro del grupo de recurs
 | Container App | `ca-expirycontrol-backend` | Ejecuta el contenedor y le da HTTPS público |
 | PostgreSQL Flexible Server | `psql-expirycontrol-…` | Base de datos administrada |
 | Log Analytics | `log-expirycontrol` | Guarda los logs del contenedor durante 30 días |
+| Cuenta de almacenamiento | `stexpirycontrolweb` | Sirve el frontend como sitio estático |
 
 La aplicación corre con 0,5 CPU y 1 GB de memoria, en una sola réplica. No se escala a más porque el bloqueo por usuario (`UserLocks`) vive en la memoria del proceso.
 
@@ -694,7 +697,7 @@ No hay contraseñas de Azure guardadas en GitHub ni usuario administrador en el 
 
 | Quién | Qué es | Permisos |
 |---|---|---|
-| GitHub Actions | *Service Principal* `gh-expirycontrol-backend` | `AcrPush` sobre el registro, `Contributor` solo sobre la Container App, `Reader` sobre el grupo |
+| GitHub Actions | *Service Principal* `gh-expirycontrol-backend` | `AcrPush` sobre el registro, `Contributor` solo sobre la Container App, `Reader` sobre el grupo. Para el frontend, escritura solo sobre la cuenta de almacenamiento |
 | La aplicación | Identidad administrada asignada por el sistema | `AcrPull` sobre el registro |
 
 Un Service Principal es una identidad para programas, no para personas. El pipeline inicia sesión con **OIDC**: GitHub emite un token de corta duración que dice de qué repositorio y rama viene, y Azure lo acepta porque hay una *credencial federada* que confía únicamente en la rama `master` de este repositorio. Por eso el despliegue no funciona desde otra rama ni desde un fork.
@@ -899,7 +902,7 @@ Total: 116 tests.
 
 Los cinco tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 
-El resultado de la validación de conjunto, incluido el recorrido en la app web, está en [VALIDACION.md](VALIDACION.md).
+El resultado de la validación de conjunto, incluido el recorrido en la app web, está en [VALIDACION.md](VALIDACION.md). Ahí está también la validación del despliegue en Azure.
 
 ## Estructura del proyecto
 
