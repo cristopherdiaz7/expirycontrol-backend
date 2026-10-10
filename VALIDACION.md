@@ -72,3 +72,39 @@ ALTER TABLE losses ALTER COLUMN total_amount TYPE numeric(19,2);
 ```
 
 En una instalación nueva no hace falta: la tabla ya se crea con el tamaño correcto.
+
+## Validación del despliegue en Azure
+
+Realizada el 9 de octubre de 2026 sobre la versión `036be66` del backend, desplegada por el pipeline.
+
+| Qué se ejecutó | Resultado |
+|---|---|
+| Recorrido de la API con Postman (Newman) contra la URL pública del backend | 30 peticiones, 49 de 49 comprobaciones |
+| Pipeline del backend en `master` (tests, imagen, publicación y despliegue) | Correcto |
+| Pipeline del frontend en `main` (tests, compilación y despliegue) | Correcto |
+| Sitio web publicado, abierto en un navegador | Carga y se comunica con el backend |
+
+### Qué se verificó
+
+- **Salud y versión.** `/actuator/health` y `/actuator/health/readiness` responden `UP`, con la base conectada. `/actuator/info` informa el mismo commit que desplegó el pipeline.
+- **Registro, login y JWT.** Alta de un usuario, rechazo del email repetido (`409`), de datos inválidos (`400`) y de la contraseña incorrecta (`401`). Sin token o con un token inválido, los endpoints responden `401`.
+- **Reglas de negocio contra la base real.** Productos, vencimientos, notificaciones y pérdidas dan los mismos resultados que en los tests: un producto vencido de 2 unidades a 100 genera una pérdida de 200 ARS, que queda en el historial al eliminar el producto.
+- **Migraciones.** La base de Azure se creó vacía y Flyway aplicó el esquema al arrancar.
+- **HTTPS.** La URL responde por HTTPS y redirige las peticiones HTTP.
+- **CORS.** El backend acepta peticiones desde el sitio publicado y rechaza con `403` las de otro origen.
+- **Logs.** Cada petición queda registrada con método, ruta, código y duración. En los logs revisados no aparecen tokens, contraseñas ni emails.
+- **Despliegue continuo.** Tres despliegues consecutivos del backend quedaron activos con la etiqueta de su commit (`sha-178bdfa` a mano, `sha-b6f1b14` y `sha-036be66` por el pipeline).
+
+### Incidentes durante el despliegue
+
+| Qué pasó | Cómo se resolvió |
+|---|---|
+| El pipeline falló al descargar imágenes públicas por el límite de descargas anónimas (`429`) | Las imágenes de Maven y PostgreSQL se piden a tres orígenes, con reintentos. El `Dockerfile` no cambió |
+| El entorno de Container Apps se creó en un modo que no admite identidades administradas | Se recreó en modo de perfiles de carga, plan de consumo |
+
+### Qué no se verificó
+
+- Carga con muchos usuarios a la vez. La aplicación corre en una sola réplica.
+- Qué pasa si la base de Azure se detiene con la aplicación en marcha. No se probó en el entorno desplegado.
+- Las aplicaciones de Android e iOS contra el backend de Azure. Solo se probó la versión web.
+- El usuario de prueba creado durante el recorrido con Postman queda en la base: la API no tiene un endpoint para borrar usuarios.
