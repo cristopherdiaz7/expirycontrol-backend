@@ -878,27 +878,39 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:lates
 | Qué | Dónde se ve | Qué muestra |
 |---|---|---|
 | **Logs de la aplicación** | Salida estándar del contenedor | Arranque, migraciones de Flyway, pool de conexiones, avisos y errores |
-| **Registro de accesos** (solo perfil `prod`) | Salida estándar, líneas que empiezan con `ACCESO` | Método, ruta, código de respuesta y duración de cada petición |
+| **Registro de peticiones** | Salida estándar, líneas `HTTP …` | Identificador, método, ruta, código de respuesta y duración de cada petición |
 | **Salud** | `/actuator/health` y sus sondas | Si la aplicación y la base responden |
 | **Versión** | `/actuator/info` | Versión y commit desplegados |
 | **Métricas de la plataforma** | Azure (al desplegar) | CPU, memoria, cantidad de peticiones, reinicios y réplicas |
 
-Ejemplo del registro de accesos:
+### Registro de peticiones
+
+Cada petición que llega al backend deja **una sola línea**, escrita por [`RequestLoggingFilter`](src/main/java/com/example/demo/config/RequestLoggingFilter.java):
 
 ```
-ACCESO POST /login 200 257ms
-ACCESO GET /products 401 18ms
+INFO [3f2b9c1e-…] … RequestLoggingFilter : HTTP POST /login 200 257ms
+INFO [8a41d0c7-…] … RequestLoggingFilter : HTTP GET /products 401 2ms
 ```
+
+- **Identificador de petición.** Entre corchetes. Se devuelve en la cabecera `X-Request-Id` de la respuesta, así que se puede buscar en los logs la línea exacta de una petición hecha desde Postman o el navegador. Si el cliente envía su propio `X-Request-Id`, se usa ese, siempre que sea corto (hasta 64 caracteres) y solo tenga letras, números, `.`, `_` o `-`; si no, se genera uno nuevo.
+- **Todas las líneas de esa petición** llevan el mismo identificador, incluidas las de un error. Las líneas que no vienen de una petición, como las del arranque, tienen los corchetes vacíos.
+- **Respuestas 401.** El filtro corre antes que Spring Security, así que también quedan registradas las peticiones rechazadas por falta de token.
+- **Errores no controlados.** Se registran en nivel `ERROR`, con código `500`, el identificador y la traza del error.
+- **Sondas de salud.** Azure consulta `/actuator/health` cada pocos segundos. Esas peticiones se registran en nivel `DEBUG`, que no se muestra, para que no tapen las peticiones reales. Si una sonda recibe un error 500, sí aparece.
+
+Antes este registro lo hacía Tomcat, solo en el perfil `prod`, sin identificador y con las sondas mezcladas: de cada 300 líneas, unas 299 eran de las sondas. Ahora funciona en todos los perfiles y el de Tomcat está apagado, para no registrar dos veces cada petición.
+
+**Para seguir una petición en Azure:** se hace la petición, se copia el valor de `X-Request-Id` de la respuesta y se busca en *Supervisión → Secuencia de registro* de la Container App.
 
 Todo va por salida estándar, sin archivos de log: la plataforma donde corre el contenedor es la que recoge, guarda y permite consultar los logs.
 
 ### Qué no aparece en los logs
 
-Se comprobó usando la imagen y buscando después en sus logs los valores utilizados:
+Se comprobó usando la imagen y buscando después en sus logs los valores utilizados. Además, [`RequestLoggingIntegrationTest`](src/test/java/com/example/demo/RequestLoggingIntegrationTest.java) lo verifica en cada ejecución de los tests:
 
 - No aparecen la clave JWT, la contraseña de la base, las contraseñas de los usuarios ni los tokens emitidos.
 - No aparecen emails ni cabeceras `Authorization`.
-- El registro de accesos guarda la ruta sin sus parámetros.
+- El registro de peticiones guarda la ruta sin sus parámetros, y nunca cuerpos ni cabeceras.
 - En producción no se registran las sentencias SQL (solo en `dev`).
 
 ### Qué no está implementado
@@ -932,11 +944,14 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `ProductServiceTest` | 11 | Reglas de vencimiento, estadísticas y casos límite de fechas |
 | `JwtServiceTest` | 8 | Generación y validación de tokens |
 | `UserServiceTest` | 6 | Registro y login |
+| `RequestLoggingIntegrationTest` | 7 | Registro de peticiones: una línea por petición, identificador en la respuesta y en el log, 401, sondas de salud y ausencia de datos sensibles |
+| `RequestLoggingFilterTest` | 3 | Errores no controlados registrados como 500 con su identificador, y validación del identificador recibido |
+| `RequestLoggingServerTest` | 1 | Con un servidor real: el filtro se registra solo, antes que la seguridad, y anota cada petición una vez |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 116 tests.
+Total: 127 tests.
 
-Los cinco tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
+Los tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 
 El resultado de la validación de conjunto, incluido el recorrido en la app web, está en [VALIDACION.md](VALIDACION.md). Ahí está también la validación del despliegue en Azure.
 
@@ -953,7 +968,7 @@ expirycontrol-backend/
     ├── main/
     │   ├── java/com/example/demo/
     │   │   ├── DemoApplication.java   Punto de entrada (fija UTC y define BCrypt)
-    │   │   ├── config/                Seguridad y CORS
+    │   │   ├── config/                Seguridad, CORS y registro de peticiones
     │   │   ├── controller/            Endpoints HTTP
     │   │   ├── dto/                   Datos de entrada y salida
     │   │   ├── exception/             Excepciones y respuestas de error

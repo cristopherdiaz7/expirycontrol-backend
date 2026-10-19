@@ -26,6 +26,12 @@ spring:
           time_zone: UTC
 
 # Actuator: solo se publican salud (sin detalles internos) e información de versión.
+# Cada línea de log lleva entre corchetes el identificador de la petición que la generó
+# (vacío en las líneas que no vienen de una petición, como las del arranque).
+logging:
+  pattern:
+    level: "%5p [%X{requestId:-}]"
+
 management:
   endpoints:
     web:
