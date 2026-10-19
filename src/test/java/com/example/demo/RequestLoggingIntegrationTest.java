@@ -58,6 +58,44 @@ class RequestLoggingIntegrationTest extends IntegrationTestSupport {
     }
 
     @Test
+    void anAuthenticatedRequestLogsTheIdOfItsUser(CapturedOutput output) throws Exception {
+        User user = saveUser("Ana", "ana@example.com");
+
+        String requestId = mockMvc.perform(authorized(get("/products"), user))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getHeader(RequestLoggingFilter.REQUEST_ID_HEADER);
+
+        assertThat(linesWith(output, requestId)).singleElement()
+                .asString().endsWith("HTTP GET /products 200 " + durationIn(output, requestId) + "ms usuario=" + user.getId());
+    }
+
+    @Test
+    void eachUserAppearsWithTheirOwnId(CapturedOutput output) throws Exception {
+        User ana = saveUser("Ana", "ana@example.com");
+        User bruno = saveUser("Bruno", "bruno@example.com");
+
+        String anaRequest = mockMvc.perform(authorized(get("/products"), ana)).andReturn()
+                .getResponse().getHeader(RequestLoggingFilter.REQUEST_ID_HEADER);
+        String brunoRequest = mockMvc.perform(authorized(get("/losses"), bruno)).andReturn()
+                .getResponse().getHeader(RequestLoggingFilter.REQUEST_ID_HEADER);
+
+        assertThat(linesWith(output, anaRequest)).singleElement().asString().endsWith(" usuario=" + ana.getId());
+        assertThat(linesWith(output, brunoRequest)).singleElement().asString().endsWith(" usuario=" + bruno.getId());
+    }
+
+    @Test
+    void withoutAValidTokenNoUserIsLogged(CapturedOutput output) throws Exception {
+        String withoutToken = mockMvc.perform(get("/products")).andReturn()
+                .getResponse().getHeader(RequestLoggingFilter.REQUEST_ID_HEADER);
+        String invalidToken = mockMvc.perform(get("/products").header("Authorization", "Bearer token-falso"))
+                .andExpect(status().isUnauthorized())
+                .andReturn().getResponse().getHeader(RequestLoggingFilter.REQUEST_ID_HEADER);
+
+        assertThat(linesWith(output, withoutToken)).singleElement().asString().doesNotContain("usuario=");
+        assertThat(linesWith(output, invalidToken)).singleElement().asString().doesNotContain("usuario=");
+    }
+
+    @Test
     void twoRequestsGetDifferentIds() throws Exception {
         String first = mockMvc.perform(get("/actuator/info")).andReturn()
                 .getResponse().getHeader(RequestLoggingFilter.REQUEST_ID_HEADER);
@@ -119,6 +157,7 @@ class RequestLoggingIntegrationTest extends IntegrationTestSupport {
                 .contains("HTTP GET /products 200")
                 .doesNotContain("secreta123")
                 .doesNotContain("privado@example.com")
+                .doesNotContain("Privado")
                 .doesNotContain(token)
                 .doesNotContain("Bearer")
                 .doesNotContain("today=");
@@ -132,6 +171,14 @@ class RequestLoggingIntegrationTest extends IntegrationTestSupport {
 
         assertThat(requestId).isNotBlank();
         assertThat(linesWith(output, requestId)).isEmpty();
+    }
+
+    // La duración varía en cada ejecución: se lee de la propia línea.
+    private String durationIn(CapturedOutput output, String requestId) {
+        String line = linesWith(output, requestId).get(0);
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(" (\\d+)ms").matcher(line);
+        assertThat(matcher.find()).isTrue();
+        return matcher.group(1);
     }
 
     private List<String> linesWith(CapturedOutput output, String text) {

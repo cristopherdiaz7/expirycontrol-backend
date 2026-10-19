@@ -893,7 +893,7 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:lates
 | Qué | Dónde se ve | Qué muestra |
 |---|---|---|
 | **Logs de la aplicación** | Salida estándar del contenedor | Arranque, migraciones de Flyway, pool de conexiones, avisos y errores |
-| **Registro de peticiones** | Salida estándar, líneas `HTTP …` | Identificador, método, ruta, código de respuesta y duración de cada petición |
+| **Registro de peticiones** | Salida estándar, líneas `HTTP …` | Identificador, método, ruta, código de respuesta, duración y usuario de cada petición |
 | **Salud** | `/actuator/health` y sus sondas | Si la aplicación y la base responden |
 | **Versión** | `/actuator/info` | Versión y commit desplegados |
 | **Métricas de la plataforma** | Azure (al desplegar) | CPU, memoria, cantidad de peticiones, reinicios y réplicas |
@@ -904,11 +904,13 @@ Cada petición que llega al backend deja **una sola línea**, escrita por [`Requ
 
 ```
 INFO [3f2b9c1e-…] … RequestLoggingFilter : HTTP POST /login 200 257ms
+INFO [5d7e2a90-…] … RequestLoggingFilter : HTTP POST /products 201 35ms usuario=7
 INFO [8a41d0c7-…] … RequestLoggingFilter : HTTP GET /products 401 2ms
 ```
 
 - **Identificador de petición.** Entre corchetes. Se devuelve en la cabecera `X-Request-Id` de la respuesta, así que se puede buscar en los logs la línea exacta de una petición hecha desde Postman o el navegador. Si el cliente envía su propio `X-Request-Id`, se usa ese, siempre que sea corto (hasta 64 caracteres) y solo tenga letras, números, `.`, `_` o `-`; si no, se genera uno nuevo.
 - **Todas las líneas de esa petición** llevan el mismo identificador, incluidas las de un error. Las líneas que no vienen de una petición, como las del arranque, tienen los corchetes vacíos.
+- **Usuario.** Si la petición trae un token válido, la línea termina con `usuario=<id>`: así se ven por separado los movimientos de cada usuario. Es solo el id numérico, nunca el email ni el nombre. Sin token, o con un token inválido, no se sabe quién la hizo y la línea queda sin usuario. El login tampoco lo muestra, porque en esa petición todavía no hay token.
 - **Respuestas 401.** El filtro corre antes que Spring Security, así que también quedan registradas las peticiones rechazadas por falta de token.
 - **Errores no controlados.** Se registran en nivel `ERROR`, con código `500`, el identificador y la traza del error.
 - **Sondas de salud.** Azure consulta `/actuator/health` cada pocos segundos. Esas peticiones se registran en nivel `DEBUG`, que no se muestra, para que no tapen las peticiones reales. Si una sonda recibe un error 500, sí aparece.
@@ -924,7 +926,7 @@ Todo va por salida estándar, sin archivos de log: la plataforma donde corre el 
 Se comprobó usando la imagen y buscando después en sus logs los valores utilizados. Además, [`RequestLoggingIntegrationTest`](src/test/java/com/example/demo/RequestLoggingIntegrationTest.java) lo verifica en cada ejecución de los tests:
 
 - No aparecen la clave JWT, la contraseña de la base, las contraseñas de los usuarios ni los tokens emitidos.
-- No aparecen emails ni cabeceras `Authorization`.
+- No aparecen emails, nombres ni cabeceras `Authorization`. De cada usuario solo se registra el id numérico.
 - El registro de peticiones guarda la ruta sin sus parámetros, y nunca cuerpos ni cabeceras.
 - En producción no se registran las sentencias SQL (solo en `dev`).
 
@@ -960,12 +962,12 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `ProductServiceTest` | 11 | Reglas de vencimiento, estadísticas y casos límite de fechas |
 | `JwtServiceTest` | 8 | Generación y validación de tokens |
 | `UserServiceTest` | 6 | Registro y login |
-| `RequestLoggingIntegrationTest` | 7 | Registro de peticiones: una línea por petición, identificador en la respuesta y en el log, 401, sondas de salud y ausencia de datos sensibles |
+| `RequestLoggingIntegrationTest` | 10 | Registro de peticiones: una línea por petición, identificador en la respuesta y en el log, usuario de cada petición, 401, sondas de salud y ausencia de datos sensibles |
 | `RequestLoggingFilterTest` | 3 | Errores no controlados registrados como 500 con su identificador, y validación del identificador recibido |
-| `RequestLoggingServerTest` | 1 | Con un servidor real: el filtro se registra solo, antes que la seguridad, y anota cada petición una vez |
+| `RequestLoggingServerTest` | 2 | Con un servidor real: el filtro se registra solo, antes que la seguridad, anota cada petición una vez y registra el usuario |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 130 tests.
+Total: 134 tests.
 
 Los tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 
