@@ -621,20 +621,36 @@ Medidos en una máquina de desarrollo; sirven de orientación.
 
 ## Integración continua
 
-El workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre en GitHub Actions en cada push a `master`, en cada Pull Request hacia `master` y también a mano desde la pestaña Actions.
+La integración continua (CI) y el despliegue continuo (CD) están en workflows separados:
+
+| Workflow | Archivo | Qué hace | Despliega |
+|---|---|---|---|
+| **CI** | [`ci.yml`](.github/workflows/ci.yml) | Prueba el código, construye la imagen y, en `master`, la publica en el registro | **No** |
+| **CD** | [`cd.yml`](.github/workflows/cd.yml) | Despliega en Azure una imagen ya publicada | Sí |
+| **CodeQL** | [`codeql.yml`](.github/workflows/codeql.yml) | Analiza el código fuente | No |
+
+El CI corre en cada Pull Request hacia `master`, en cada push a `master` y también a mano desde la pestaña Actions. Un push a `master` que solo cambia documentación (archivos `.md`) no lo ejecuta: no genera una imagen nueva ni despliega.
 
 | Job | Qué hace | Si falla |
 |---|---|---|
 | **Tests y jar** | Instala Java 21, ejecuta todos los tests, genera el jar y comprueba que existe `target/app.jar` | El job siguiente no se ejecuta |
-| **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | Los jobs siguientes no se ejecutan |
-| **Publicar imagen** | Solo en `master`: sube la imagen al registro de Azure | No se despliega |
-| **Desplegar en Azure** | Solo en `master`: actualiza la aplicación y comprueba la versión | El pipeline queda en rojo |
+| **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | No se publica |
+| **Publicar imagen** | Solo en `master`: sube la imagen al registro de Azure | El CD no se ejecuta |
 
-Cada job depende del anterior (`needs`): nunca se construye una imagen a partir de un código con tests rotos, ni se despliega una imagen que no arrancó. Los dos últimos se explican en [Despliegue continuo en Azure](#despliegue-continuo-en-azure).
+Cada job depende del anterior (`needs`): nunca se construye una imagen a partir de un código con tests rotos, ni se publica una imagen que no arrancó.
+
+**Qué pasa en cada caso:**
+
+| Situación | Tests | Imagen | Publicación | Despliegue |
+|---|---|---|---|---|
+| Pull Request hacia `master` | Sí | Se construye y se prueba | No | No |
+| Merge o push a `master` | Sí | Sí | Sí, con la etiqueta del commit | Sí, en el workflow CD |
+| Merge a `master` que solo cambia archivos `.md` | No corre el CI | No | No | No |
+| CD ejecutado a mano | No | No | No | Sí, con una imagen ya publicada |
 
 **Prueba de arranque.** Dentro del pipeline se levanta un PostgreSQL vacío y se arranca la imagen con el perfil `prod`, como en producción. Se comprueba que `/actuator/health` responde `UP` y que `/products` sigue respondiendo `401` sin token. Detecta lo que los tests no ven: una imagen que no compila, una migración que falla o una variable que falta.
 
-**Sin secretos en las pruebas.** Los dos primeros jobs no usan ninguna credencial guardada. La contraseña de la base y la clave JWT de la prueba se generan al azar en cada ejecución. El permiso por defecto del workflow es leer el código (`contents: read`); cada job pide solo lo que le falta.
+**Sin secretos en las pruebas.** Los jobs de prueba no usan ninguna credencial guardada. La contraseña de la base y la clave JWT de la prueba se generan al azar en cada ejecución. El permiso por defecto del workflow es leer el código (`contents: read`); cada job pide solo lo que le falta.
 
 **Reporte de tests.** Si algún test falla, el reporte queda disponible para descargar desde la ejecución durante 7 días.
 
@@ -642,11 +658,30 @@ Cada job depende del anterior (`needs`): nunca se construye una imagen a partir 
 
 ## Despliegue continuo en Azure
 
-Cada cambio que llega a `master` se publica y se despliega solo. En un Pull Request los jobs de publicación y despliegue no corren: ahí solo se prueba.
+El despliegue está en su propio workflow, [`cd.yml`](.github/workflows/cd.yml), separado del CI. No compila ni construye nada: toma una imagen que el CI ya probó y publicó, y la pone en Azure.
 
 ```
-push a master → Tests y jar → Imagen Docker → Publicar imagen → Desplegar en Azure
+CI:  Tests y jar → Imagen Docker → Publicar imagen (solo master)
+                                          │
+                                          │ termina bien
+                                          ▼
+CD:                              Desplegar en Azure
 ```
+
+**Se ejecuta de dos formas:**
+
+- **Automática:** cuando el CI termina bien sobre un cambio en `master`. Despliega la imagen de ese commit.
+- **Manual:** pestaña **Actions** → **CD** → **Run workflow**, indicando un commit (los 7 primeros caracteres). Despliega una imagen que ya está en el registro, sin generar una nueva. Sirve para volver a una versión anterior. Si se deja vacío, usa el último commit de `master`.
+
+**Qué hace, en orden:**
+
+1. Elige la versión: el commit que probó el CI, o el que se indicó a mano.
+2. Inicia sesión en Azure con OIDC.
+3. Comprueba que la imagen `sha-<commit>` existe en el registro. Si no existe, se detiene sin tocar la aplicación.
+4. Actualiza la Container App con esa imagen y con `APP_COMMIT`.
+5. Espera a que la URL pública responda con salud `UP` y con ese commit en `/actuator/info`.
+
+Si el CI falla o viene de un Pull Request, el CD no se ejecuta. Nunca corren dos despliegues a la vez.
 
 URL pública: `https://ca-expirycontrol-backend.jollysea-7a4f1f80.northcentralus.azurecontainerapps.io`
 
@@ -669,7 +704,7 @@ La aplicación corre con 0,5 CPU y 1 GB de memoria, en una sola réplica. No se 
 
 ### Una sola imagen
 
-La imagen se construye una vez, en el job **Imagen Docker**. Esa misma imagen, la que pasó la prueba de arranque, es la que se publica y se despliega: no se vuelve a compilar. Lo que cambia entre entornos es la configuración, no la imagen.
+La imagen se construye una vez, en el job **Imagen Docker** del CI. Esa misma imagen, la que pasó la prueba de arranque, es la que se publica y la que el CD despliega: no se vuelve a compilar. Lo que cambia entre entornos es la configuración, no la imagen.
 
 ### Versionado de imágenes
 
@@ -689,7 +724,7 @@ curl https://ca-expirycontrol-backend.jollysea-7a4f1f80.northcentralus.azurecont
 # {"app":{"name":"expiry-control","version":"0.0.1-SNAPSHOT","commit":"178bdfa"}}
 ```
 
-El job de despliegue hace esa misma consulta: termina en verde solo cuando la URL pública responde con salud `UP` y con el commit recién desplegado.
+El workflow CD hace esa misma consulta: termina en verde solo cuando la URL pública responde con salud `UP` y con el commit recién desplegado.
 
 ### Identidades y permisos
 
@@ -758,6 +793,7 @@ az postgres flexible-server stop  -g rg-expirycontrol -n <servidor>
 az postgres flexible-server start -g rg-expirycontrol -n <servidor>
 
 # Volver a una versión anterior: se despliega su etiqueta
+# (lo mismo que ejecutar el workflow CD a mano con ese commit)
 az containerapp update -g rg-expirycontrol -n ca-expirycontrol-backend \
   --image expirycontrolacr.azurecr.io/expirycontrol-backend:sha-<commit> \
   --set-env-vars APP_COMMIT=<commit>
@@ -990,6 +1026,3 @@ Ya hay otra instancia del backend corriendo. Cerrarla antes de iniciar una nueva
 **Después de cambiar `JWT_SECRET`, la app pide iniciar sesión otra vez**
 
 Es el comportamiento esperado: los tokens emitidos con la clave anterior dejan de ser válidos.
-
-
-26/

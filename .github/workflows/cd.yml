@@ -1,0 +1,136 @@
+name: CD
+
+# Despliegue continuo: pone en Azure una imagen que el CI ya construyó, probó y publicó.
+# No compila ni construye nada: si la imagen no existe en el registro, no despliega.
+#
+# Se ejecuta de dos formas:
+# - Automática: cuando el workflow CI termina bien sobre un cambio en master.
+# - Manual: desde la pestaña Actions, indicando el commit a desplegar. Sirve para
+#   volver a una versión anterior o para redesplegar sin generar una imagen nueva.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit a desplegar (los 7 primeros caracteres). Vacío: el último de master"
+        required: false
+        type: string
+
+# Por defecto el workflow solo puede leer el código. El job pide lo que le falte.
+permissions:
+  contents: read
+
+# Un solo despliegue a la vez, y nunca se interrumpe uno que ya empezó.
+concurrency:
+  group: cd-produccion
+  cancel-in-progress: false
+
+# Nombres de los recursos de Azure. No son secretos: solo identifican dónde se despliega.
+env:
+  ACR_NAME: expirycontrolacr
+  IMAGE_NAME: expirycontrol-backend
+  RESOURCE_GROUP: rg-expirycontrol
+  CONTAINER_APP: ca-expirycontrol-backend
+
+jobs:
+  deploy:
+    name: Desplegar en Azure
+    # Automático: solo si el CI terminó bien y no venía de un Pull Request.
+    # Manual: solo desde master, la única rama en la que Azure confía.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event != 'pull_request')
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Permite pedir a GitHub el token OIDC con el que se inicia sesión en Azure.
+      id-token: write
+    steps:
+      # La versión sale del commit que probó el CI, o del que se indique a mano.
+      - name: Elegir la versión
+        id: version
+        env:
+          COMMIT_CI: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_MANUAL: ${{ inputs.commit }}
+        run: |
+          if [ -n "$COMMIT_CI" ]; then
+            commit="${COMMIT_CI::7}"
+          elif [ -n "$COMMIT_MANUAL" ]; then
+            commit="$COMMIT_MANUAL"
+          else
+            commit="${GITHUB_SHA::7}"
+          fi
+          if ! [[ "$commit" =~ ^[0-9a-f]{7}$ ]]; then
+            echo "El commit debe tener 7 caracteres hexadecimales, por ejemplo 036be66"
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-$commit" >> "$GITHUB_OUTPUT"
+          echo "Versión a desplegar: sha-$commit"
+
+      # Inicio de sesión sin contraseña (OIDC). Los tres valores son identificadores.
+      - name: Iniciar sesión en Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Antes de tocar la aplicación, se confirma que la imagen está en el registro.
+      - name: Comprobar que la imagen existe
+        run: |
+          az acr login --name "$ACR_NAME"
+          image="$ACR_NAME.azurecr.io/$IMAGE_NAME:${{ steps.version.outputs.tag }}"
+          if ! docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "La imagen $image no existe en el registro: no se despliega nada."
+            echo "Se publica cuando el CI termina bien sobre un cambio en master."
+            exit 1
+          fi
+          echo "Imagen encontrada: $image"
+
+      - name: Instalar la extensión de Container Apps
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      # Solo cambian la imagen y APP_COMMIT. Los secretos y el resto de la configuración
+      # viven en la Container App y no pasan por el pipeline.
+      - name: Actualizar la aplicación
+        run: |
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_APP" \
+            --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:${{ steps.version.outputs.tag }}" \
+            --set-env-vars "APP_COMMIT=${{ steps.version.outputs.commit }}" \
+            --only-show-errors --output none
+
+      # El despliegue se da por bueno cuando la URL pública responde con salud UP
+      # y /actuator/info informa el commit recién desplegado.
+      - name: Comprobar la versión desplegada
+        run: |
+          set -euo pipefail
+          fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_APP" \
+            --query properties.configuration.ingress.fqdn --output tsv)"
+          url="https://$fqdn"
+          esperado="${{ steps.version.outputs.commit }}"
+
+          for i in $(seq 1 40); do
+            info="$(curl -fsS --max-time 10 "$url/actuator/info" 2> /dev/null || true)"
+            salud="$(curl -fsS --max-time 10 "$url/actuator/health" 2> /dev/null || true)"
+            if echo "$info" | grep -q "\"commit\":\"$esperado\"" && echo "$salud" | grep -q '"status":"UP"'; then
+              echo "Versión $esperado desplegada y con salud UP"
+              {
+                echo "### Despliegue correcto"
+                echo ""
+                echo "Versión **$esperado** en $url"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "La versión $esperado no quedó activa a tiempo. Última respuesta de /actuator/info: $info"
+          exit 1
