@@ -69,6 +69,66 @@ jobs:
           path: target/surefire-reports/
           retention-days: 7
 
+  # Los tests corren sobre H2. Las pruebas de concurrencia se repiten acá contra un
+  # PostgreSQL real, con el esquema de Flyway: el bloqueo de filas y las restricciones
+  # son los mismos que en producción.
+  postgres:
+    name: Concurrencia en PostgreSQL
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      - name: Instalar Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Dar permiso de ejecución a mvnw
+        run: chmod +x mvnw
+
+      # Misma descarga resistente al límite de los registros públicos que en el job de la imagen.
+      - name: Levantar PostgreSQL
+        run: |
+          set -euo pipefail
+          for ronda in 1 2 3; do
+            for origen in public.ecr.aws/docker/library mirror.gcr.io/library docker.io/library; do
+              if docker pull --quiet "$origen/postgres:16" > /dev/null; then
+                docker tag "$origen/postgres:16" postgres:16
+                break 2
+              fi
+            done
+            if [ "$ronda" -lt 3 ]; then sleep 20; fi
+          done
+
+          DB_PASSWORD="$(openssl rand -hex 16)"
+          echo "::add-mask::$DB_PASSWORD"
+          echo "TEST_DB_PASSWORD=$DB_PASSWORD" >> "$GITHUB_ENV"
+          docker run -d --name db -p 5432:5432 \
+            -e POSTGRES_DB=expiry_test \
+            -e POSTGRES_USER=expiry_test \
+            -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+            postgres:16
+
+          for i in $(seq 1 30); do
+            if docker exec db pg_isready -h 127.0.0.1 -U expiry_test -d expiry_test > /dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          echo "PostgreSQL no arrancó"
+          exit 1
+
+      - name: Pruebas de concurrencia contra PostgreSQL
+        env:
+          TEST_DB_URL: jdbc:postgresql://localhost:5432/expiry_test
+          TEST_DB_USER: expiry_test
+          TEST_DB_DRIVER: org.postgresql.Driver
+          TEST_DB_FLYWAY: "true"
+          TEST_DB_DDL_AUTO: validate
+        run: ./mvnw -B test -Dtest='LossConcurrencyIntegrationTest,LossApiIntegrationTest#simultaneousRequestsRecordTheLossOnlyOnce'
+
   docker:
     name: Imagen Docker
     # Solo si los tests pasaron: no se construye una imagen con tests rotos.
@@ -218,8 +278,8 @@ jobs:
   # En un Pull Request no se publica nada; solo se construye y se prueba.
   publish:
     name: Publicar imagen
-    # Solo en master y solo si la imagen pasó todas las comprobaciones.
-    needs: docker
+    # Solo en master y solo si la imagen y las pruebas en PostgreSQL pasaron.
+    needs: [docker, postgres]
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

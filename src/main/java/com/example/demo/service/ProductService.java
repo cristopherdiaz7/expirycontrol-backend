@@ -8,6 +8,7 @@ import com.example.demo.model.Product;
 import com.example.demo.model.User;
 import com.example.demo.repository.NotificationReadRepository;
 import com.example.demo.repository.ProductRepository;
+import com.example.demo.repository.UserRepository;
 import java.time.LocalDate;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -21,9 +22,9 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final NotificationReadRepository notificationReadRepository;
+    private final UserRepository userRepository;
     private final LossService lossService;
     private final TransactionTemplate transactionTemplate;
-    private final UserLocks userLocks;
 
     @Transactional
     public ProductResponse create(Long userId, ProductRequest request) {
@@ -113,21 +114,22 @@ public class ProductService {
         return mapToResponse(updatedProduct);
     }
 
-    // Usa el candado del usuario y su propia transacción para no cruzarse con el registro de pérdidas.
+    // Bloquea al usuario en la base, igual que el registro de pérdidas, para no cruzarse con él
+    // aunque las dos peticiones lleguen a réplicas distintas.
     public void delete(Long userId, Long id, LocalDate clientToday) {
         LocalDate today = ClientDates.resolveToday(clientToday);
 
-        synchronized (userLocks.forUser(userId)) {
-            transactionTemplate.executeWithoutResult(status -> {
-                Product product = productRepository.findByIdAndUserId(id, userId)
-                        .orElseThrow(() -> new ProductNotFoundException("Producto no encontrado"));
-                // Si estaba vencido, su pérdida queda en el historial.
-                lossService.freezeBeforeProductDeletion(product, today);
-                // El estado de lectura de sus notificaciones se va con el producto.
-                notificationReadRepository.deleteByProductId(product.getId());
-                productRepository.delete(product);
-            });
-        }
+        transactionTemplate.executeWithoutResult(status -> {
+            userRepository.lockById(userId);
+
+            Product product = productRepository.findByIdAndUserId(id, userId)
+                    .orElseThrow(() -> new ProductNotFoundException("Producto no encontrado"));
+            // Si estaba vencido, su pérdida queda en el historial.
+            lossService.freezeBeforeProductDeletion(product, today);
+            // El estado de lectura de sus notificaciones se va con el producto.
+            notificationReadRepository.deleteByProductId(product.getId());
+            productRepository.delete(product);
+        });
     }
 
     private ProductResponse mapToResponse(Product product) {
