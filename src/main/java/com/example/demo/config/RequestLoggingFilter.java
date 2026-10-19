@@ -16,17 +16,21 @@ import java.io.IOException;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-// Registra cada petición HTTP en una línea: método, ruta, código de respuesta y duración.
+// Registra cada petición HTTP en una línea: método, ruta, código de respuesta, duración
+// y, si la petición trae un token válido, el id del usuario que la hizo.
 // Le asigna un identificador que se devuelve en la cabecera X-Request-Id y aparece en todas
 // las líneas de log de esa petición, para poder seguirla.
 // Corre antes que Spring Security, así también quedan registradas las respuestas 401.
-// No registra cuerpos, parámetros ni cabeceras: nunca aparecen contraseñas, tokens ni emails.
+// No registra cuerpos, parámetros ni cabeceras: nunca aparecen contraseñas, tokens, emails ni nombres.
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class RequestLoggingFilter extends OncePerRequestFilter {
 
     public static final String REQUEST_ID_HEADER = "X-Request-Id";
     public static final String MDC_KEY = "requestId";
+
+    // Lo completa JwtAuthenticationFilter cuando el token es válido. Solo el id numérico.
+    public static final String USER_ID_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".userId";
 
     private static final Logger log = LoggerFactory.getLogger(RequestLoggingFilter.class);
 
@@ -51,7 +55,8 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
         } catch (IOException | ServletException | RuntimeException ex) {
             // Un error no controlado termina en 500: se registra con su identificador
             // antes de que el servidor arme la respuesta de error.
-            log.error("HTTP {} {} 500 {}ms", request.getMethod(), request.getRequestURI(), elapsedMs(start), ex);
+            log.error("HTTP {} {} 500 {}ms{}", request.getMethod(), request.getRequestURI(), elapsedMs(start),
+                    userSuffix(request), ex);
             throw ex;
         } finally {
             MDC.remove(MDC_KEY);
@@ -66,8 +71,14 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
         if (path.startsWith(HEALTH_PATH) && status < 500) {
             log.debug("HTTP {} {} {} {}ms", request.getMethod(), path, status, durationMs);
         } else {
-            log.info("HTTP {} {} {} {}ms", request.getMethod(), path, status, durationMs);
+            log.info("HTTP {} {} {} {}ms{}", request.getMethod(), path, status, durationMs, userSuffix(request));
         }
+    }
+
+    // Sin token válido no se sabe quién hizo la petición: la línea queda sin usuario.
+    private static String userSuffix(HttpServletRequest request) {
+        Object userId = request.getAttribute(USER_ID_ATTRIBUTE);
+        return userId instanceof Long id ? " usuario=" + id : "";
     }
 
     static String resolveRequestId(String received) {

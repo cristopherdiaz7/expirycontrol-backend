@@ -1,4 +1,6 @@
 package com.example.demo.security;
+import com.example.demo.config.RequestLoggingFilter;
+import com.example.demo.model.User;
 import com.example.demo.service.UserService;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
@@ -55,6 +57,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     );
                     authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authToken);
+                    // Para el registro de peticiones: solo el id, nunca el email ni el nombre.
+                    if (userDetails instanceof User user) {
+                        request.setAttribute(RequestLoggingFilter.USER_ID_ATTRIBUTE, user.getId());
+                    }
                 } else {
                     rejectToken(request, JwtAuthenticationEntryPoint.INVALID_TOKEN);
                 }
