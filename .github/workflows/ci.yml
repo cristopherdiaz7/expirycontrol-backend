@@ -1,10 +1,16 @@
 name: CI
 
 # Integración continua: tests, jar e imagen Docker en cada cambio.
-# Despliegue continuo: en master, además, se publica la imagen y se despliega en Azure.
+# En master, además, la imagen probada se publica en el registro de Azure.
+# Este workflow nunca despliega: de eso se encarga cd.yml, cuando el CI termina bien.
 on:
   push:
     branches: [master]
+    # Un cambio que solo toca documentación no genera una imagen nueva ni despliega.
+    paths-ignore:
+      - "**.md"
+  # En un Pull Request corre siempre, aunque solo cambie documentación:
+  # así se ve que el CI prueba y construye sin desplegar.
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -14,17 +20,15 @@ permissions:
   contents: read
 
 # Si llega un cambio nuevo a la misma rama, se cancela la ejecución anterior.
-# En master no se cancela: un despliegue no se interrumpe por la mitad.
+# En master no se cancela: una publicación no se interrumpe por la mitad.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
-# Nombres de los recursos de Azure. No son secretos: solo identifican dónde se despliega.
+# Registro donde se publica la imagen. No son secretos: solo identifican el destino.
 env:
   ACR_NAME: expirycontrolacr
   IMAGE_NAME: expirycontrol-backend
-  RESOURCE_GROUP: rg-expirycontrol
-  CONTAINER_APP: ca-expirycontrol-backend
 
 jobs:
   test:
@@ -210,6 +214,8 @@ jobs:
         if: always()
         run: docker logs app 2>&1 | tail -n 60 || true
 
+  # Publicar no es desplegar: la imagen queda en el registro, lista para que cd.yml la use.
+  # En un Pull Request no se publica nada; solo se construye y se prueba.
   publish:
     name: Publicar imagen
     # Solo en master y solo si la imagen pasó todas las comprobaciones.
@@ -220,9 +226,6 @@ jobs:
       contents: read
       # Permite pedir a GitHub el token OIDC con el que se inicia sesión en Azure.
       id-token: write
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      commit: ${{ steps.tag.outputs.commit }}
     steps:
       - name: Recuperar la imagen probada
         uses: actions/download-artifact@v8
@@ -257,63 +260,10 @@ jobs:
           docker tag expiry-control:ci "$repo:latest"
           docker push "$repo:${{ steps.tag.outputs.tag }}"
           docker push "$repo:latest"
-          echo "Imagen publicada: \`$repo:${{ steps.tag.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
-
-  deploy:
-    name: Desplegar en Azure
-    needs: publish
-    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Iniciar sesión en Azure
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Instalar la extensión de Container Apps
-        run: az extension add --name containerapp --upgrade --only-show-errors
-
-      # Se despliega la etiqueta del commit, nunca "latest": así se sabe qué versión corre.
-      # Solo cambian la imagen y APP_COMMIT; los secretos y el resto de la configuración
-      # viven en la Container App y no pasan por el pipeline.
-      - name: Actualizar la aplicación
-        run: |
-          az containerapp update \
-            --resource-group "$RESOURCE_GROUP" \
-            --name "$CONTAINER_APP" \
-            --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:${{ needs.publish.outputs.tag }}" \
-            --set-env-vars "APP_COMMIT=${{ needs.publish.outputs.commit }}" \
-            --only-show-errors --output none
-
-      # El despliegue se da por bueno cuando la URL pública responde con salud UP
-      # y /actuator/info informa el commit recién desplegado.
-      - name: Comprobar la versión desplegada
-        run: |
-          set -euo pipefail
-          fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_APP" \
-            --query properties.configuration.ingress.fqdn --output tsv)"
-          url="https://$fqdn"
-          esperado="${{ needs.publish.outputs.commit }}"
-
-          for i in $(seq 1 40); do
-            info="$(curl -fsS --max-time 10 "$url/actuator/info" 2> /dev/null || true)"
-            salud="$(curl -fsS --max-time 10 "$url/actuator/health" 2> /dev/null || true)"
-            if echo "$info" | grep -q "\"commit\":\"$esperado\"" && echo "$salud" | grep -q '"status":"UP"'; then
-              echo "Versión $esperado desplegada y con salud UP"
-              {
-                echo "### Despliegue correcto"
-                echo ""
-                echo "Versión **$esperado** en $url"
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            sleep 10
-          done
-
-          echo "La versión $esperado no quedó activa a tiempo. Última respuesta de /actuator/info: $info"
-          exit 1
+          {
+            echo "### Imagen publicada"
+            echo ""
+            echo "\`$repo:${{ steps.tag.outputs.tag }}\`"
+            echo ""
+            echo "El despliegue lo hace el workflow CD, por separado."
+          } >> "$GITHUB_STEP_SUMMARY"
