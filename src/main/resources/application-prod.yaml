@@ -12,17 +12,8 @@ server:
   error:
     include-message: never
     include-stacktrace: never
-  # Registro de accesos por salida estándar, junto al resto de los logs.
-  # Solo método, ruta (sin parámetros), código de respuesta y duración: nunca cabeceras ni cuerpos.
-  tomcat:
-    accesslog:
-      enabled: true
-      directory: /dev
-      prefix: stdout
-      suffix: ""
-      file-date-format: ""
-      buffered: false
-      pattern: 'ACCESO %m %U %s %{ms}Tms'
+  # Las peticiones las registra RequestLoggingFilter, con su identificador y en todos los perfiles.
+  # El registro de accesos de Tomcat queda apagado para no anotar dos veces cada petición.
 
 app:
   cors:
