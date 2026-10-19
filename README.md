@@ -1026,3 +1026,5 @@ Ya hay otra instancia del backend corriendo. Cerrarla antes de iniciar una nueva
 **Después de cambiar `JWT_SECRET`, la app pide iniciar sesión otra vez**
 
 Es el comportamiento esperado: los tokens emitidos con la clave anterior dejan de ser válidos.
+
+prueba de CI sin despliegue
