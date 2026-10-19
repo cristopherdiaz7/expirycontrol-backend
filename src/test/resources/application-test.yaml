@@ -1,15 +1,18 @@
 spring:
-  # Los tests usan H2 y dejan que Hibernate cree las tablas; las migraciones son para PostgreSQL.
+  # Por defecto los tests usan H2 y dejan que Hibernate cree las tablas; las migraciones son para PostgreSQL.
+  # Las variables TEST_DB_* permiten correr los mismos tests contra un PostgreSQL real con el esquema
+  # de Flyway (lo hace el CI con los tests de concurrencia).
+  # LOCK_TIMEOUT: en H2 una transacción espera hasta 10 s un bloqueo de fila antes de fallar.
   flyway:
-    enabled: false
+    enabled: ${TEST_DB_FLYWAY:false}
   datasource:
-    url: jdbc:h2:mem:expirytest;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
-    username: sa
-    password: ""
-    driver-class-name: org.h2.Driver
+    url: ${TEST_DB_URL:jdbc:h2:mem:expirytest;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000}
+    username: ${TEST_DB_USER:sa}
+    password: ${TEST_DB_PASSWORD:}
+    driver-class-name: ${TEST_DB_DRIVER:org.h2.Driver}
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: ${TEST_DB_DDL_AUTO:create-drop}
     show-sql: false
 
 app:

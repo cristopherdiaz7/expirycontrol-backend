@@ -440,10 +440,22 @@ Las pérdidas se registran al consultarlas (`GET /losses` o `GET /losses/stats`)
 
 ### Reglas
 
-- **Una sola pérdida por producto.** No se cuenta dos veces, aunque lleguen consultas simultáneas; la base de datos lo garantiza con una restricción de unicidad.
+- **Una sola pérdida por producto.** No se cuenta dos veces, aunque lleguen consultas simultáneas. Ver [Peticiones simultáneas](#peticiones-simultáneas).
 - **Mientras el producto existe, la pérdida lo acompaña.** Si se corrige su nombre, cantidad o precio, la pérdida se actualiza. Si la fecha pasa a ser futura, la pérdida se quita.
 - **Al eliminar el producto, la pérdida queda en el historial** tal como estaba, y ya no se modifica.
 - Cada usuario ve únicamente sus pérdidas.
+
+### Peticiones simultáneas
+
+Las operaciones que tocan pérdidas (consultar `/losses` o `/losses/stats`, y eliminar un producto) se ejecutan **de a una por usuario**, también si llegan a réplicas distintas del backend.
+
+**Cómo.** Cada una de esas operaciones abre una transacción y lo primero que hace es bloquear la fila del usuario en PostgreSQL (`SELECT … FOR UPDATE`, en `UserRepository.lockById`). Si llega otra operación del mismo usuario, espera a que la primera termine. El bloqueo se libera solo al terminar la transacción. Usuarios distintos no se esperan entre sí.
+
+**Por qué en la base y no en memoria.** Antes se usaba un candado en la memoria del proceso (`UserLocks`). Funcionaba con una sola instancia, pero dos réplicas no comparten memoria. Las pruebas lo demostraron: sin un bloqueo compartido, las peticiones simultáneas terminaban en error. Además, una consulta cruzada con el borrado del producto podía dejar la misma pérdida dos veces en el historial, porque la clave foránea desvincula del producto la pérdida que la otra petición acababa de crear. La base es lo único que todas las réplicas comparten.
+
+**Segunda barrera.** La restricción de unicidad `uk_losses_product` impide dos pérdidas para el mismo producto, aunque el código fallara.
+
+**Lo que se resignó.** Mientras espera el bloqueo, una petición ocupa una conexión del pool. Solo pasa con peticiones simultáneas del mismo usuario, y cada operación dura milisegundos.
 
 ### Ejemplos
 
@@ -634,10 +646,13 @@ El CI corre en cada Pull Request hacia `master`, en cada push a `master` y tambi
 | Job | Qué hace | Si falla |
 |---|---|---|
 | **Tests y jar** | Instala Java 21, ejecuta todos los tests, genera el jar y comprueba que existe `target/app.jar` | El job siguiente no se ejecuta |
+| **Concurrencia en PostgreSQL** | Repite las pruebas de concurrencia contra un PostgreSQL 16 real, con el esquema de Flyway | No se publica |
 | **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | No se publica |
 | **Publicar imagen** | Solo en `master`: sube la imagen al registro de Azure | El CD no se ejecuta |
 
-Cada job depende del anterior (`needs`): nunca se construye una imagen a partir de un código con tests rotos, ni se publica una imagen que no arrancó.
+Cada job depende de los anteriores (`needs`): nunca se construye una imagen a partir de un código con tests rotos, ni se publica una imagen que no arrancó o que falló en PostgreSQL.
+
+**Por qué las pruebas de concurrencia se repiten en PostgreSQL.** Los tests usan H2, que no bloquea filas exactamente igual que PostgreSQL. Las variables `TEST_DB_*` hacen que los mismos tests apunten a un PostgreSQL real con el esquema de las migraciones.
 
 **Qué pasa en cada caso:**
 
@@ -700,7 +715,7 @@ Todos están en la suscripción *Azure for Students*, dentro del grupo de recurs
 | Log Analytics | `log-expirycontrol` | Guarda los logs del contenedor durante 30 días |
 | Cuenta de almacenamiento | `stexpirycontrolweb` | Sirve el frontend como sitio estático |
 
-La aplicación corre con 0,5 CPU y 1 GB de memoria, en una sola réplica. No se escala a más porque el bloqueo por usuario (`UserLocks`) vive en la memoria del proceso.
+La aplicación corre con 0,5 CPU y 1 GB de memoria, en una sola réplica, por costo. La aplicación no guarda estado en memoria entre peticiones, así que podría correr con más réplicas: la coordinación entre peticiones simultáneas la hace PostgreSQL (ver [Peticiones simultáneas](#peticiones-simultáneas)).
 
 ### Una sola imagen
 
@@ -938,6 +953,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
 | `HealthIntegrationTest` | 8 | Endpoints de salud y de versión públicos, y resto de los endpoints de gestión no expuestos |
+| `LossConcurrencyIntegrationTest` | 3 | Peticiones simultáneas de un mismo usuario: consultas cruzadas con el borrado del producto, muchas consultas a la vez, y la restricción de unicidad de la base |
 | `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
 | `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
 | `NotificationServiceTest` | 11 | Categorías sin duplicados, límites de días y estado de lectura |
@@ -949,7 +965,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `RequestLoggingServerTest` | 1 | Con un servidor real: el filtro se registra solo, antes que la seguridad, y anota cada petición una vez |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 127 tests.
+Total: 130 tests.
 
 Los tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 

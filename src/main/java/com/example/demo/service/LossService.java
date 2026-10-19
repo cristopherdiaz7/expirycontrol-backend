@@ -7,6 +7,7 @@ import com.example.demo.model.Loss;
 import com.example.demo.model.Product;
 import com.example.demo.repository.LossRepository;
 import com.example.demo.repository.ProductRepository;
+import com.example.demo.repository.UserRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -33,8 +34,8 @@ public class LossService {
 
     private final ProductRepository productRepository;
     private final LossRepository lossRepository;
+    private final UserRepository userRepository;
     private final TransactionTemplate transactionTemplate;
-    private final UserLocks userLocks;
 
     public List<LossResponse> getLosses(Long userId, LocalDate clientToday) {
         syncLosses(userId, ClientDates.resolveToday(clientToday));
@@ -86,28 +87,31 @@ public class LossService {
         }
     }
 
+    // El bloqueo del usuario en la base hace que dos sincronizaciones del mismo usuario,
+    // o una sincronización y un borrado, no se crucen aunque lleguen a réplicas distintas.
+    // Se libera al terminar la transacción.
     private void syncLosses(Long userId, LocalDate today) {
-        synchronized (userLocks.forUser(userId)) {
-            transactionTemplate.executeWithoutResult(status -> {
-                Map<Long, Loss> lossesByProduct = lossRepository.findByUserIdAndProductIsNotNull(userId).stream()
-                        .collect(Collectors.toMap(loss -> loss.getProduct().getId(), Function.identity(), (first, second) -> first));
+        transactionTemplate.executeWithoutResult(status -> {
+            userRepository.lockById(userId);
 
-                for (Product product : productRepository.findByUserId(userId)) {
-                    Loss existing = lossesByProduct.get(product.getId());
+            Map<Long, Loss> lossesByProduct = lossRepository.findByUserIdAndProductIsNotNull(userId).stream()
+                    .collect(Collectors.toMap(loss -> loss.getProduct().getId(), Function.identity(), (first, second) -> first));
 
-                    if (isLost(product, today)) {
-                        Loss loss = existing != null ? existing : newLoss(product);
-                        if (existing == null || differs(loss, product)) {
-                            applySnapshot(loss, product);
-                            lossRepository.save(loss);
-                        }
-                    } else if (existing != null) {
-                        // La fecha se corrigió y el producto ya no está vencido.
-                        lossRepository.delete(existing);
+            for (Product product : productRepository.findByUserId(userId)) {
+                Loss existing = lossesByProduct.get(product.getId());
+
+                if (isLost(product, today)) {
+                    Loss loss = existing != null ? existing : newLoss(product);
+                    if (existing == null || differs(loss, product)) {
+                        applySnapshot(loss, product);
+                        lossRepository.save(loss);
                     }
+                } else if (existing != null) {
+                    // La fecha se corrigió y el producto ya no está vencido.
+                    lossRepository.delete(existing);
                 }
-            });
-        }
+            }
+        });
     }
 
     // Misma regla de "vencido" que el resto del sistema: la fecha es hoy o anterior.
