@@ -617,7 +617,7 @@ El historial queda en la tabla `flyway_schema_history`.
 
 ## Imagen Docker
 
-El `Dockerfile` de la raíz construye la imagen de producción en tres etapas: descarga de dependencias, compilación y una imagen final mínima (*distroless*, sin shell) que ejecuta la aplicación con un usuario sin privilegios. Es el provisto por la cátedra y se usa sin modificaciones.
+El `Dockerfile` de la raíz construye la imagen de producción en tres etapas: descarga de dependencias, compilación y una imagen final mínima (*distroless*, sin shell) que ejecuta la aplicación con un usuario sin privilegios. Es el provisto por la cátedra, con un único agregado en la etapa final: el agente de Application Insights (ver [Application Insights](#application-insights)). La imagen base, las etapas, el usuario y el `ENTRYPOINT` no cambiaron.
 
 ### Construir
 
@@ -889,7 +889,7 @@ Requiere crear una cuenta y guardar un token en el repositorio. Lo que aportarí
 
 ### Por qué Grype solo informa
 
-Grype no detiene el pipeline (`fail-build: false`). La imagen base la define el `Dockerfile` de la cátedra, que no se modifica: un hallazgo en el sistema base o en la JVM no se podría corregir desde este repositorio. El informe queda a la vista para evaluarlo.
+Grype no detiene el pipeline (`fail-build: false`). La imagen base la define el `Dockerfile` de la cátedra: un hallazgo en el sistema base o en la JVM no se podría corregir desde este repositorio. El informe queda a la vista para evaluarlo.
 
 ### Estado de los hallazgos de Grype
 
@@ -1010,8 +1010,44 @@ Los valores se reinician cuando se reinicia la aplicación: no se guardan en nin
 
 ### Qué no está implementado
 
-- **Almacenamiento de métricas:** no hay un servidor de Prometheus ni paneles de Grafana; las métricas se consultan en el momento.
-- **Trazas y Application Insights:** la forma habitual de usarlo en Java requiere agregar un archivo a la imagen, lo que obligaría a modificar el `Dockerfile`.
+- **Servidor de Prometheus o Grafana:** las métricas de `/actuator/prometheus` se consultan en el momento. Su historia se ve en Application Insights.
+
+### Application Insights
+
+Application Insights es el servicio de Azure que observa la aplicación desde afuera: recibe sus peticiones, errores, tiempos y consultas a la base, y los muestra en el portal **separados por aplicación**. Con varias aplicaciones, cada una aparecería por separado; en este proyecto hay una sola, el backend, porque cada aplicación desplegada consume crédito.
+
+**Cómo se conecta.** Con el agente oficial de Microsoft para Java, que va dentro de la imagen. Es el único cambio al `Dockerfile` de la cátedra, en la etapa final:
+
+```dockerfile
+ADD --chmod=444 --checksum=sha256:… https://github.com/microsoft/ApplicationInsights-Java/releases/download/3.7.10/applicationinsights-agent-3.7.10.jar /app/applicationinsights-agent.jar
+ENV JDK_JAVA_OPTIONS="-javaagent:/app/applicationinsights-agent.jar"
+ENV APPLICATIONINSIGHTS_SELF_DIAGNOSTICS_DESTINATION=console
+```
+
+- El agente tiene versión fija y se verifica con su checksum: si el archivo descargado no coincide, la imagen no se construye.
+- `JDK_JAVA_OPTIONS` le indica a Java que lo cargue al arrancar, sin cambiar el `ENTRYPOINT`. No se usa `JAVA_TOOL_OPTIONS` porque esa variable la define la Container App para la memoria y la pisaría.
+- El agente escribe su diagnóstico en la consola: por defecto lo haría en un archivo dentro de `/app`, donde el usuario sin privilegios no puede escribir.
+- El código de la aplicación no cambió: el agente mide desde afuera.
+
+**A dónde envía los datos.** A la dirección que recibe en `APPLICATIONINSIGHTS_CONNECTION_STRING`. En Azure es un secreto de la Container App (`appinsights-connection`), igual que la contraseña de la base. Sin esa variable el agente no envía nada: por eso en desarrollo no hace falta configurar nada.
+
+**En el CI** la prueba de arranque le pasa una dirección falsa, que apunta a un puerto local cerrado: el agente arranca y mide igual que en Azure, pero no envía nada. El paso **Comprobar el agente de Application Insights** verifica que arrancó.
+
+**Recursos en Azure:** `appi-expirycontrol`, conectado al mismo Log Analytics que los logs (`log-expirycontrol`). La aplicación aparece con el nombre `expirycontrol-backend` (`APPLICATIONINSIGHTS_ROLE_NAME`).
+
+**Qué se ve en el portal** (`appi-expirycontrol`):
+
+| Pantalla | Qué muestra |
+|---|---|
+| **Mapa de aplicación** | El backend y lo que usa, como PostgreSQL, con la cantidad de llamadas y errores |
+| **Rendimiento** | Cada ruta con su cantidad de peticiones y su tiempo de respuesta |
+| **Errores** | Las peticiones que fallaron y sus excepciones |
+| **Búsqueda de transacciones** | Cada petición por separado, con las consultas a la base que hizo: son las **trazas** |
+| **Métricas en vivo** | Peticiones, errores y uso de CPU en tiempo real |
+
+Los datos tardan unos minutos en aparecer, salvo en *Métricas en vivo*.
+
+**Costo.** Se cobra por la cantidad de datos recibidos. Con el tráfico de este proyecto debería quedar dentro de lo que Azure no cobra; el gasto real se ve en *Administración de costos* del grupo de recursos.
 
 ## Tests
 
@@ -1057,7 +1093,7 @@ El resultado de la validación de conjunto, incluido el recorrido en la app web,
 
 ```
 expirycontrol-backend/
-├── Dockerfile                  Imagen de producción (provisto por la cátedra)
+├── Dockerfile                  Imagen de producción (de la cátedra, con el agente de Application Insights)
 ├── .dockerignore               Archivos que no entran a la imagen
 ├── docker-compose.yml          PostgreSQL 16 para desarrollo
 ├── .env.example                Plantilla de variables de entorno
