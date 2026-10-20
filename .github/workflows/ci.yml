@@ -208,6 +208,7 @@ jobs:
             -e POSTGRES_PASSWORD="$DB_PASSWORD" \
             -e JWT_SECRET="$JWT_SECRET" \
             -e CORS_ALLOWED_ORIGINS=http://localhost:8081 \
+            -e APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=http://127.0.0.1:9/" \
             expiry-control:ci
 
           echo "Esperando a la aplicación..."
@@ -221,6 +222,17 @@ jobs:
 
           echo "La aplicación no respondió a tiempo"
           exit 1
+
+      # La prueba de arranque le pasa al agente una dirección falsa (un puerto local cerrado):
+      # así arranca y mide la aplicación como en Azure, pero no envía nada a ningún lado.
+      - name: Comprobar el agente de Application Insights
+        run: |
+          linea="$(docker logs app 2>&1 | grep -m1 "Application Insights Java Agent" || true)"
+          echo "$linea"
+          if ! echo "$linea" | grep -q "started successfully"; then
+            echo "El agente de Application Insights no arrancó"
+            exit 1
+          fi
 
       # Grype revisa la imagen ya construida: sistema base, JVM y librerías empaquetadas.
       # Solo informa (fail-build: false): la imagen base la define el Dockerfile de la cátedra.
