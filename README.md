@@ -22,6 +22,7 @@ El frontend (Expo / React Native) está en un repositorio aparte: [expirycontrol
 - [Errores](#errores)
 - [CORS](#cors)
 - [Salud](#salud)
+- [Cierre controlado](#cierre-controlado)
 - [Migraciones de la base](#migraciones-de-la-base)
 - [Imagen Docker](#imagen-docker)
 - [Integración continua](#integración-continua)
@@ -563,6 +564,47 @@ La versión sale del `pom.xml` al compilar. El commit lo informa el despliegue m
 
 Además de estos dos, se publican las métricas (ver [Métricas de la aplicación](#métricas-de-la-aplicación)). El resto de los endpoints de gestión (`/actuator/env`, `/actuator/beans`, `/actuator/loggers` y demás) no está expuesto y responde `401` sin token y `404` con token.
 
+## Cierre controlado
+
+Cuando la aplicación recibe la orden de apagarse (al detenerla, reiniciarla o reemplazarla por una versión nueva), **no corta de golpe**:
+
+1. Deja de aceptar pedidos nuevos.
+2. Espera a que terminen los pedidos que ya estaban en curso, hasta 30 segundos.
+3. Cierra las conexiones a la base y termina.
+
+Se configura en [`application.yaml`](src/main/resources/application.yaml):
+
+```yaml
+server:
+  shutdown: graceful
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+```
+
+Azure espera **60 segundos** antes de forzar el cierre del contenedor (`terminationGracePeriodSeconds` de la Container App), así que Spring siempre llega a terminar dentro de su margen de 30.
+
+### Cómo se sabe que se detuvo bien
+
+Spring lo deja escrito en el log, en este orden:
+
+```
+Commencing graceful shutdown. Waiting for active requests to complete
+HTTP GET /products 200 …ms              ← un pedido que estaba en curso termina normalmente
+Graceful shutdown complete
+HikariPool-1 - Shutdown completed.
+```
+
+Se comprueba de tres formas:
+
+| Dónde | Qué comprueba |
+|---|---|
+| [`GracefulShutdownTest`](src/test/java/com/example/demo/GracefulShutdownTest.java) | Deja un pedido de 3 segundos en curso, apaga la aplicación y verifica que el pedido termina con `200` y que aparecen los mensajes |
+| CI, paso **Prueba de cierre controlado** | Apaga el contenedor real con `docker stop` y verifica los mensajes y que Docker no tuvo que forzar el cierre |
+| Azure | Al detener la aplicación, los mensajes aparecen en *Supervisión → Registros* |
+
+Junto con que la aplicación no guarda nada en memoria (los datos y la coordinación de pedidos están en PostgreSQL), esto es lo que cumple el factor 9 de los doce factores, **desechabilidad**: la aplicación se puede detener o reemplazar en cualquier momento sin perder datos ni dejar pedidos a medias.
+
 ## Migraciones de la base
 
 El esquema lo crea [Flyway](https://flywaydb.org/) a partir de los archivos de `src/main/resources/db/migration`. Hibernate ya no crea ni modifica tablas: solo verifica, al arrancar, que el esquema coincida con las entidades.
@@ -629,7 +671,7 @@ Medidos en una máquina de desarrollo; sirven de orientación.
 | Tamaño de la imagen | 386 MB |
 | Memoria en uso | Entre 270 y 350 MB |
 | Arranque con 512 MB de memoria | Correcto |
-| Cierre | Ordenado: termina las peticiones en curso y cierra el pool de conexiones |
+| Cierre | Ordenado: termina las peticiones en curso y cierra el pool de conexiones (ver [Cierre controlado](#cierre-controlado)) |
 
 ## Integración continua
 
@@ -647,7 +689,7 @@ El CI corre en cada Pull Request hacia `master`, en cada push a `master` y tambi
 |---|---|---|
 | **Tests y jar** | Instala Java 21, ejecuta todos los tests, genera el jar y comprueba que existe `target/app.jar` | El job siguiente no se ejecuta |
 | **Concurrencia en PostgreSQL** | Repite las pruebas de concurrencia contra un PostgreSQL 16 real, con el esquema de Flyway | No se publica |
-| **Imagen Docker** | Construye la imagen con el `Dockerfile` y hace una prueba de arranque | No se publica |
+| **Imagen Docker** | Construye la imagen con el `Dockerfile`, hace una prueba de arranque y una de cierre controlado | No se publica |
 | **Publicar imagen** | Solo en `master`: sube la imagen al registro de Azure | El CD no se ejecuta |
 
 Cada job depende de los anteriores (`needs`): nunca se construye una imagen a partir de un código con tests rotos, ni se publica una imagen que no arrancó o que falló en PostgreSQL.
@@ -664,6 +706,8 @@ Cada job depende de los anteriores (`needs`): nunca se construye una imagen a pa
 | CD ejecutado a mano | No | No | No | Sí, con una imagen ya publicada |
 
 **Prueba de arranque.** Dentro del pipeline se levanta un PostgreSQL vacío y se arranca la imagen con el perfil `prod`, como en producción. Se comprueba que `/actuator/health` responde `UP` y que `/products` sigue respondiendo `401` sin token. Detecta lo que los tests no ven: una imagen que no compila, una migración que falla o una variable que falta.
+
+**Prueba de cierre controlado.** Al final se detiene ese mismo contenedor con `docker stop` y se comprueba en su log que el cierre fue ordenado: que terminó los pedidos en curso y cerró las conexiones a la base, sin que Docker tuviera que forzarlo.
 
 **Sin secretos en las pruebas.** Los jobs de prueba no usan ninguna credencial guardada. La contraseña de la base y la clave JWT de la prueba se generan al azar en cada ejecución. El permiso por defecto del workflow es leer el código (`contents: read`); cada job pide solo lo que le falta.
 
@@ -990,6 +1034,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
 | `HealthIntegrationTest` | 8 | Endpoints de salud y de versión públicos, y resto de los endpoints de gestión no expuestos |
 | `MetricsServerTest` | 3 | Con un servidor real: métricas públicas, peticiones contadas por ruta y código, y sin datos personales |
+| `GracefulShutdownTest` | 1 | Cierre controlado: un pedido en curso termina antes de que la aplicación se apague |
 | `LossConcurrencyIntegrationTest` | 3 | Peticiones simultáneas de un mismo usuario: consultas cruzadas con el borrado del producto, muchas consultas a la vez, y la restricción de unicidad de la base |
 | `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
 | `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
@@ -1002,7 +1047,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `RequestLoggingServerTest` | 2 | Con un servidor real: el filtro se registra solo, antes que la seguridad, anota cada petición una vez y registra el usuario |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 137 tests.
+Total: 138 tests.
 
 Los tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 

@@ -24,6 +24,14 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+  # Cierre controlado (desechabilidad): al recibir la orden de apagado se esperan hasta 30 s
+  # a que terminen los pedidos en curso. Azure espera 60 s antes de forzar el cierre.
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+# Al apagarse, el servidor deja de aceptar pedidos nuevos y termina los que están en curso.
+server:
+  shutdown: graceful
 
 # Cada línea de log lleva entre corchetes el identificador de la petición que la generó
 # (vacío en las líneas que no vienen de una petición, como las del arranque).
