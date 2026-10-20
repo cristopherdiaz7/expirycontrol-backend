@@ -256,6 +256,36 @@ jobs:
           echo "GET /products sin token: $status"
           test "$status" = "401"
 
+      # Desechabilidad: al recibir la orden de apagado, la aplicación termina los pedidos en
+      # curso y cierra sus conexiones antes de que Docker tenga que forzar el cierre.
+      - name: Prueba de cierre controlado
+        run: |
+          set -euo pipefail
+          inicio=$(date +%s)
+          docker stop --time 60 app > /dev/null
+          segundos=$(( $(date +%s) - inicio ))
+          codigo="$(docker inspect app --format '{{.State.ExitCode}}')"
+          logs="$(docker logs app 2>&1)"
+          echo "La aplicación se detuvo en ${segundos} s (código de salida $codigo)"
+
+          for mensaje in "Commencing graceful shutdown" "Graceful shutdown complete" "HikariPool-1 - Shutdown completed"; do
+            if ! echo "$logs" | grep -qF "$mensaje"; then
+              echo "Falta en el log: $mensaje"
+              exit 1
+            fi
+            echo "En el log: $mensaje"
+          done
+          # 137 significa que Docker tuvo que matar el proceso: el cierre no fue ordenado.
+          if [ "$codigo" = "137" ]; then
+            echo "Docker tuvo que forzar el cierre"
+            exit 1
+          fi
+          {
+            echo "### Cierre controlado"
+            echo ""
+            echo "La aplicación se detuvo en ${segundos} s, terminando los pedidos en curso y cerrando las conexiones a la base."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # La imagen que se publica es esta misma, la que pasó la prueba de arranque:
       # se construye una sola vez y no se vuelve a compilar para desplegar.
       - name: Exportar la imagen probada
