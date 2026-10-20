@@ -561,7 +561,7 @@ No muestra detalles internos.
 
 La versión sale del `pom.xml` al compilar. El commit lo informa el despliegue mediante la variable de entorno `APP_COMMIT`; sin ella figura `local`.
 
-Son los dos únicos endpoints de gestión publicados: el resto (`/actuator/env`, `/actuator/metrics` y demás) no está expuesto y responde `401` sin token y `404` con token.
+Además de estos dos, se publican las métricas (ver [Métricas de la aplicación](#métricas-de-la-aplicación)). El resto de los endpoints de gestión (`/actuator/env`, `/actuator/beans`, `/actuator/loggers` y demás) no está expuesto y responde `401` sin token y `404` con token.
 
 ## Migraciones de la base
 
@@ -896,6 +896,7 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:lates
 | **Registro de peticiones** | Salida estándar, líneas `HTTP …` | Identificador, método, ruta, código de respuesta, duración y usuario de cada petición |
 | **Salud** | `/actuator/health` y sus sondas | Si la aplicación y la base responden |
 | **Versión** | `/actuator/info` | Versión y commit desplegados |
+| **Métricas de la aplicación** | `/actuator/prometheus` y `/actuator/metrics` | Peticiones por ruta y resultado, tiempos de respuesta, conexiones a la base, memoria y hilos |
 | **Métricas de la plataforma** | Azure (al desplegar) | CPU, memoria, cantidad de peticiones, reinicios y réplicas |
 
 ### Registro de peticiones
@@ -930,9 +931,42 @@ Se comprobó usando la imagen y buscando después en sus logs los valores utiliz
 - El registro de peticiones guarda la ruta sin sus parámetros, y nunca cuerpos ni cabeceras.
 - En producción no se registran las sentencias SQL (solo en `dev`).
 
+### Métricas de la aplicación
+
+La aplicación mide sola, con Micrometer, y publica los valores en dos formatos:
+
+| Endpoint | Formato | Para qué |
+|---|---|---|
+| `/actuator/prometheus` | Texto, formato de Prometheus | Ver todas las métricas juntas, o que las lea una herramienta como Prometheus o Grafana |
+| `/actuator/metrics` | JSON | Ver la lista de métricas y consultar una por nombre, por ejemplo `/actuator/metrics/http.server.requests` |
+
+Algunas de las que aparecen:
+
+| Métrica | Qué mide |
+|---|---|
+| `http_server_requests_seconds_count` | Cuántas peticiones hubo, por método, ruta y código de respuesta |
+| `http_server_requests_seconds_sum` y `_max` | Cuánto tardaron en total y la más lenta |
+| `hikaricp_connections_active`, `_idle`, `_pending` | Conexiones del pool a la base: en uso, libres y en espera |
+| `jvm_memory_used_bytes` | Memoria que usa la JVM |
+| `process_uptime_seconds` | Tiempo desde que arrancó la aplicación |
+
+Ejemplo:
+
+```
+http_server_requests_seconds_count{method="GET",outcome="SUCCESS",status="200",uri="/products"} 12
+http_server_requests_seconds_count{method="GET",outcome="CLIENT_ERROR",status="401",uri="/products"} 3
+hikaricp_connections_active{pool="HikariPool-1"} 0
+```
+
+**Son públicas, a propósito,** para poder consultarlas sin token. No contienen datos personales: las rutas se agrupan por plantilla (`/products/{id}`), así que no aparecen ids concretos, ni emails, ni contraseñas. Lo que sí muestran es qué rutas tiene la API y cuánto se usa cada una. En un sistema con información sensible convendría protegerlas.
+
+**Logs y métricas se complementan.** El registro de peticiones dice qué pasó con cada petición, una por una; las métricas dicen cuántas hubo y cuánto tardaron, sumadas.
+
+Los valores se reinician cuando se reinicia la aplicación: no se guardan en ningún lado. Para conservar su historia haría falta un servidor de Prometheus que las lea cada cierto tiempo, que no está configurado.
+
 ### Qué no está implementado
 
-- **Métricas internas de la aplicación** (`/actuator/metrics`): no se publican. La aplicación no tiene roles, así que cualquier usuario registrado podría leerlas. Las métricas de la plataforma cubren lo necesario.
+- **Almacenamiento de métricas:** no hay un servidor de Prometheus ni paneles de Grafana; las métricas se consultan en el momento.
 - **Trazas y Application Insights:** la forma habitual de usarlo en Java requiere agregar un archivo a la imagen, lo que obligaría a modificar el `Dockerfile`.
 
 ## Tests
@@ -955,6 +989,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `SecurityIntegrationTest` | 22 | Respuestas 401, acceso con token válido, registro, login, CORS, parámetro `today` y aislamiento entre usuarios |
 | `ProductApiIntegrationTest` | 11 | CRUD de productos por HTTP y validación de campos |
 | `HealthIntegrationTest` | 8 | Endpoints de salud y de versión públicos, y resto de los endpoints de gestión no expuestos |
+| `MetricsServerTest` | 3 | Con un servidor real: métricas públicas, peticiones contadas por ruta y código, y sin datos personales |
 | `LossConcurrencyIntegrationTest` | 3 | Peticiones simultáneas de un mismo usuario: consultas cruzadas con el borrado del producto, muchas consultas a la vez, y la restricción de unicidad de la base |
 | `LossApiIntegrationTest` | 18 | Validación del precio, registro de pérdidas, importes, no duplicación, correcciones, historial al eliminar, estadísticas y aislamiento entre usuarios |
 | `NotificationApiIntegrationTest` | 11 | Notificaciones por HTTP: listado, lectura, cambio de categoría, borrado y aislamiento entre usuarios |
@@ -967,7 +1002,7 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `RequestLoggingServerTest` | 2 | Con un servidor real: el filtro se registra solo, antes que la seguridad, anota cada petición una vez y registra el usuario |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 134 tests.
+Total: 137 tests.
 
 Los tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 

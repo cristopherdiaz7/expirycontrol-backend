@@ -25,18 +25,19 @@ spring:
         jdbc:
           time_zone: UTC
 
-# Actuator: solo se publican salud (sin detalles internos) e información de versión.
 # Cada línea de log lleva entre corchetes el identificador de la petición que la generó
 # (vacío en las líneas que no vienen de una petición, como las del arranque).
 logging:
   pattern:
     level: "%5p [%X{requestId:-}]"
 
+# Actuator: se publican salud (sin detalles internos), versión y métricas.
+# El resto de los endpoints de gestión (env, beans, loggers…) no se publica.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,prometheus
   info:
     env:
       enabled: true
