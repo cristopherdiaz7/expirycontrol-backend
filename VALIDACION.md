@@ -106,5 +106,35 @@ Realizada el 9 de octubre de 2026 sobre la versión `036be66` del backend, despl
 
 - Carga con muchos usuarios a la vez. La aplicación corre en una sola réplica.
 - Qué pasa si la base de Azure se detiene con la aplicación en marcha. No se probó en el entorno desplegado.
-- Las aplicaciones de Android e iOS contra el backend de Azure. Solo se probó la versión web.
+- La app en iOS contra el backend de Azure: Expo Go para iOS no admite el SDK 53 del proyecto. Android se verificó después (ver la sección siguiente).
 - El usuario de prueba creado durante el recorrido con Postman queda en la base: la API no tiene un endpoint para borrar usuarios.
+
+## Validación de las correcciones (octubre de 2026)
+
+Después de la evaluación de Ingeniería de Software Aplicada se corrigieron los puntos observados y se sumaron mejoras pedidas por el programa de Programación II. Esta sección registra solo lo que se comprobó de verdad, y cómo.
+
+| Qué se cambió | Cómo se verificó | Resultado |
+|---|---|---|
+| CI y CD en workflows separados (`ci.yml` y `cd.yml`) | Cambio solo en el README en un Pull Request (PR #42): el CI probó y construyó la imagen, y el CD no se ejecutó. Al mergearlo no corrió ni el CI ni el CD | Correcto |
+| Registro de cada petición con identificador (`X-Request-Id`) y usuario | Peticiones con identificadores propios y registro repetido (`201` y `409`), buscados después en los logs de Azure. Recorrido en la web con las líneas `usuario=<id>` | Correcto |
+| Coordinación de pérdidas en la base (`SELECT … FOR UPDATE`) en lugar de `UserLocks` | Pruebas de concurrencia que fallaban sin el bloqueo y pasan con él, en H2 y en PostgreSQL 16 real (job *Concurrencia en PostgreSQL* del CI) | Correcto |
+| Cierre controlado (`server.shutdown: graceful`) | Test con un pedido en curso que termina con `200` antes del apagado; `docker stop` en el CI; aplicación detenida en Azure y mensajes de cierre ordenado en Log Analytics | Correcto |
+| Application Insights (agente en la imagen) | Peticiones (`POST /register` 201 y 409, `POST /login` 200) y consultas a PostgreSQL recibidas bajo el nombre `expirycontrol-backend` | Correcto |
+| Métricas de Actuator cerradas | `/actuator/metrics` y `/actuator/prometheus` responden `401` sin token y `404` con token (`HealthIntegrationTest`) | Correcto en los tests |
+| Frontend con Axios | Navegador automático contra el backend de Azure: registro (`201`), registro repetido (`409`), login fallido (`401`) y correcto, crear y eliminar un producto | Correcto |
+| Postman y la web usan la misma API y la misma base | Usuario y producto creados directamente por la API y vistos después en la web pública | Correcto |
+| Botón para mostrar u ocultar la contraseña | Tests del componente y navegador real en tamaño computadora y celular, en el login y en el registro | Correcto |
+| App en Android | Emulador de Android Studio (Pixel 6, Android 14) contra el backend de Azure: inicio de sesión y creación de un producto | Correcto, probado por el alumno |
+
+### Tests automáticos al cierre
+
+| Proyecto | Tests |
+|---|---|
+| Backend | 135 de 135 |
+| Frontend | 71 de 71 |
+
+### Qué sigue sin verificarse
+
+- La app en iOS (por la versión de Expo Go).
+- Carga con muchos usuarios a la vez.
+- El funcionamiento con más de una réplica en Azure: la coordinación entre réplicas se probó con hilos simultáneos y en PostgreSQL real, pero en Azure corre una sola réplica, por costo.

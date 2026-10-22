@@ -39,13 +39,13 @@ logging:
   pattern:
     level: "%5p [%X{requestId:-}]"
 
-# Actuator: se publican salud (sin detalles internos), versión y métricas.
-# El resto de los endpoints de gestión (env, beans, loggers…) no se publica.
+# Actuator: solo se publican salud (sin detalles internos) e información de versión.
+# Las métricas de la aplicación se ven en Application Insights, no en endpoints públicos.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info
   info:
     env:
       enabled: true

@@ -53,7 +53,7 @@ class HealthIntegrationTest extends IntegrationTestSupport {
 
     @Test
     void otherManagementEndpointsAreNotPublic() throws Exception {
-        for (String path : new String[] {"/actuator", "/actuator/env", "/actuator/beans", "/actuator/loggers"}) {
+        for (String path : new String[] {"/actuator", "/actuator/env", "/actuator/metrics", "/actuator/prometheus", "/actuator/beans", "/actuator/loggers"}) {
             mockMvc.perform(get(path)).andExpect(status().isUnauthorized());
         }
     }
@@ -62,7 +62,7 @@ class HealthIntegrationTest extends IntegrationTestSupport {
     void otherManagementEndpointsAreNotExposedEvenWithToken() throws Exception {
         String token = tokenFor(saveUser("Usuario", "usuario@example.com"));
 
-        for (String path : new String[] {"/actuator/env", "/actuator/beans", "/actuator/loggers"}) {
+        for (String path : new String[] {"/actuator/env", "/actuator/metrics", "/actuator/prometheus", "/actuator/beans", "/actuator/loggers"}) {
             mockMvc.perform(authorized(get(path), token)).andExpect(status().isNotFound());
         }
     }
