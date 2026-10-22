@@ -42,9 +42,6 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         // Versión desplegada: no expone datos internos.
                         .requestMatchers("/actuator/info").permitAll()
-                        // Métricas de la aplicación (peticiones, tiempos, conexiones, memoria): públicas
-                        // a propósito, para poder consultarlas sin token. No contienen datos personales.
-                        .requestMatchers("/actuator/metrics", "/actuator/metrics/**", "/actuator/prometheus").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
