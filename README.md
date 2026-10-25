@@ -175,6 +175,7 @@ Existe además el perfil `test`, que usan los tests automáticos con una base H2
    ```
 
 4. **Duración:** el token vence a la hora (configurable con `JWT_EXPIRATION_MS`). No hay renovación automática: al vencer hay que iniciar sesión de nuevo.
+5. **Cambio de contraseña:** `PUT /account/password`, con la sesión iniciada, pide la contraseña actual y la nueva. Siempre cambia la del usuario del token. Los tokens ya entregados siguen valiendo hasta que vencen.
 
 El token contiene el email (`sub`), el id (`userId`), el nombre (`name`) y las fechas de emisión y vencimiento.
 
@@ -197,6 +198,9 @@ Rutas públicas: `/register` y `/login`. Todas las demás requieren token.
 |---|---|---|---|---|
 | POST | `/register` | No | `name` y `email` (hasta 255 caracteres), `password` (de 6 a 72 caracteres) | `201` con `id`, `name`, `email` · `400` datos inválidos · `409` email ya registrado |
 | POST | `/login` | No | `email`, `password` | `200` con `token` y `user` · `400` datos inválidos · `401` credenciales incorrectas |
+| PUT | `/account/password` | Sí | `currentPassword`, `newPassword` (de 6 a 72 caracteres, distinta de la actual) | `204` sin cuerpo · `400` contraseña actual incorrecta o nueva inválida · `401` sin token |
+
+Si la contraseña actual es incorrecta, la respuesta es `400` y no `401`: con token, un `401` significa sesión vencida y el frontend cerraría la sesión.
 
 ### Productos
 
@@ -1051,13 +1055,14 @@ Los tests usan una base H2 en memoria: **no necesitan Docker ni el archivo `.env
 | `NotificationServiceTest` | 11 | Categorías sin duplicados, límites de días y estado de lectura |
 | `ProductServiceTest` | 11 | Reglas de vencimiento, estadísticas y casos límite de fechas |
 | `JwtServiceTest` | 8 | Generación y validación de tokens |
-| `UserServiceTest` | 6 | Registro y login |
+| `UserServiceTest` | 10 | Registro, login y cambio de contraseña |
+| `AccountPasswordIntegrationTest` | 5 | Cambio de contraseña por HTTP: token obligatorio, contraseña actual incorrecta, validaciones y login con la contraseña nueva |
 | `RequestLoggingIntegrationTest` | 10 | Registro de peticiones: una línea por petición, identificador en la respuesta y en el log, usuario de cada petición, 401, sondas de salud y ausencia de datos sensibles |
 | `RequestLoggingFilterTest` | 3 | Errores no controlados registrados como 500 con su identificador, y validación del identificador recibido |
 | `RequestLoggingServerTest` | 2 | Con un servidor real: el filtro se registra solo, antes que la seguridad, anota cada petición una vez y registra el usuario |
 | `DemoApplicationTests` | 1 | Arranque de la aplicación |
 
-Total: 135 tests.
+Total: 144 tests.
 
 Los tests de integración (`*IntegrationTest`) comparten su preparación en `IntegrationTestSupport`: levantan la aplicación completa, envían peticiones HTTP reales con la cadena de seguridad y vacían la base antes y después de cada test.
 
