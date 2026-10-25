@@ -55,6 +55,15 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    // 400 y no 401: con token, un 401 significa sesión vencida y la app cerraría la sesión.
+    @ExceptionHandler(PasswordChangeRejectedException.class)
+    public ResponseEntity<Map<String, Object>> handlePasswordChangeRejected(PasswordChangeRejectedException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "error", "Datos de entrada inválidos o faltantes",
+                "details", Map.of(ex.getField(), ex.getMessage())
+        ));
+    }
+
     @ExceptionHandler(InvalidClientDateException.class)
     public ResponseEntity<Map<String, String>> handleInvalidClientDate(InvalidClientDateException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));

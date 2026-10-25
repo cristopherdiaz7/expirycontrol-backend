@@ -1,11 +1,13 @@
 package com.example.demo.service;
 
+import com.example.demo.dto.ChangePasswordRequest;
 import com.example.demo.dto.LoginRequest;
 import com.example.demo.dto.LoginResponse;
 import com.example.demo.dto.UserRegisterRequest;
 import com.example.demo.dto.UserResponse;
 import com.example.demo.exception.EmailAlreadyExistsException;
 import com.example.demo.exception.InvalidCredentialsException;
+import com.example.demo.exception.PasswordChangeRejectedException;
 import com.example.demo.exception.PasswordTooLongException;
 import com.example.demo.model.User;
 import com.example.demo.repository.UserRepository;
@@ -85,6 +87,26 @@ public class UserService implements UserDetailsService {
                         .email(user.getEmail())
                         .build())
                 .build();
+    }
+
+    // Pide la contraseña actual: con una sesión abierta ajena no alcanza para cambiarla.
+    @Transactional
+    public void changePassword(Long userId, ChangePasswordRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new InvalidCredentialsException("Usuario no encontrado"));
+
+        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
+            throw new PasswordChangeRejectedException("currentPassword", "La contraseña actual es incorrecta");
+        }
+        if (request.getNewPassword().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) {
+            throw new PasswordChangeRejectedException("newPassword", "La contraseña es demasiado larga");
+        }
+        if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
+            throw new PasswordChangeRejectedException("newPassword", "La nueva contraseña debe ser distinta de la actual");
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
     }
 
     @Override

@@ -7,12 +7,14 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.demo.dto.ChangePasswordRequest;
 import com.example.demo.dto.LoginRequest;
 import com.example.demo.dto.LoginResponse;
 import com.example.demo.dto.UserRegisterRequest;
 import com.example.demo.dto.UserResponse;
 import com.example.demo.exception.EmailAlreadyExistsException;
 import com.example.demo.exception.InvalidCredentialsException;
+import com.example.demo.exception.PasswordChangeRejectedException;
 import com.example.demo.model.User;
 import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
@@ -148,5 +150,69 @@ class UserServiceTest {
                 .thenThrow(new DataIntegrityViolationException("email duplicado"));
 
         assertThrows(EmailAlreadyExistsException.class, () -> userService.register(request));
+    }
+
+    // --- Cambio de contraseña ---
+
+    private User userWithHash() {
+        return User.builder().id(1L).email("usuario@example.com").password("hash-actual").build();
+    }
+
+    @Test
+    void changePasswordStoresHashOfNewPassword() {
+        User user = userWithHash();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("actual123", "hash-actual")).thenReturn(true);
+        when(passwordEncoder.matches("nueva456", "hash-actual")).thenReturn(false);
+        when(passwordEncoder.encode("nueva456")).thenReturn("hash-nuevo");
+
+        userService.changePassword(1L, new ChangePasswordRequest("actual123", "nueva456"));
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertEquals("hash-nuevo", captor.getValue().getPassword());
+    }
+
+    @Test
+    void changePasswordRejectsWrongCurrentPasswordWithoutSaving() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(userWithHash()));
+        when(passwordEncoder.matches("equivocada", "hash-actual")).thenReturn(false);
+
+        PasswordChangeRejectedException exception = assertThrows(
+                PasswordChangeRejectedException.class,
+                () -> userService.changePassword(1L, new ChangePasswordRequest("equivocada", "nueva456")));
+
+        assertEquals("currentPassword", exception.getField());
+        assertEquals("La contraseña actual es incorrecta", exception.getMessage());
+        verify(passwordEncoder, never()).encode(any());
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void changePasswordRejectsSamePassword() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(userWithHash()));
+        when(passwordEncoder.matches("actual123", "hash-actual")).thenReturn(true);
+
+        PasswordChangeRejectedException exception = assertThrows(
+                PasswordChangeRejectedException.class,
+                () -> userService.changePassword(1L, new ChangePasswordRequest("actual123", "actual123")));
+
+        assertEquals("newPassword", exception.getField());
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void changePasswordRejectsNewPasswordOverBcryptLimit() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(userWithHash()));
+        when(passwordEncoder.matches("actual123", "hash-actual")).thenReturn(true);
+        // 40 caracteres, pero 80 bytes: cada "ñ" ocupa 2 bytes en UTF-8.
+        String longPassword = "ñ".repeat(40);
+
+        PasswordChangeRejectedException exception = assertThrows(
+                PasswordChangeRejectedException.class,
+                () -> userService.changePassword(1L, new ChangePasswordRequest("actual123", longPassword)));
+
+        assertEquals("newPassword", exception.getField());
+        verify(userRepository, never()).save(any());
     }
 }
