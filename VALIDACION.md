@@ -125,13 +125,14 @@ Después de la evaluación de Ingeniería de Software Aplicada se corrigieron lo
 | Postman y la web usan la misma API y la misma base | Usuario y producto creados directamente por la API y vistos después en la web pública | Correcto |
 | Botón para mostrar u ocultar la contraseña | Tests del componente y navegador real en tamaño computadora y celular, en el login y en el registro | Correcto |
 | App en Android | Emulador de Android Studio (Pixel 6, Android 14) contra el backend de Azure: inicio de sesión y creación de un producto | Correcto, probado por el alumno |
+| Cambio de contraseña (`PUT /account/password`, PR #60 en el backend y PR #28 en el frontend) | Tests nuevos: 9 en el backend y 8 en el frontend. Backend local con `curl`: sin token `401`, contraseña actual incorrecta `400`, nueva corta `400`, cambio correcto `204`; después, login con la anterior `401` y con la nueva `200`. Los logs muestran `usuario=<id>` y ninguna contraseña. Navegador contra el backend local: validaciones del formulario, error de contraseña actual sin cerrar la sesión, aviso de éxito y login con la nueva, en tamaño computadora y celular. En Azure: el endpoint desplegado responde `401` sin token y la web publicada incluye la pantalla nueva | Correcto en local y en los tests. En Azure no se cambió la contraseña de ningún usuario real |
 
 ### Tests automáticos al cierre
 
 | Proyecto | Tests |
 |---|---|
-| Backend | 135 de 135 |
-| Frontend | 71 de 71 |
+| Backend | 144 de 144 |
+| Frontend | 79 de 79 |
 
 ### Qué sigue sin verificarse
 
